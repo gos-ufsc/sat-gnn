@@ -6,7 +6,7 @@ from dgl.nn import HeteroGraphConv, GraphConv
 
 
 class GCN(nn.Module):
-    def __init__(self, n_var_feats, n_con_feats, n_h_feats=10):
+    def __init__(self, n_var_feats, n_con_feats, n_h_feats=10, readout_op='mean'):
         super(GCN, self).__init__()
         self.n_var_feats = n_var_feats
         self.n_con_feats = n_con_feats
@@ -39,6 +39,8 @@ class GCN(nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(n_h_feats, 1),
         ).double()
+
+        self.readout_op = readout_op
 
     def forward(self, g):
         var_features = torch.stack((
@@ -82,4 +84,7 @@ class GCN(nn.Module):
         # per-node logits
         g.nodes['var'].data['logit'] = self.output(h_var)
 
-        return dgl.readout_nodes(g, 'logit', op='mean', ntype='var')
+        if self.readout_op is not None:
+            return dgl.readout_nodes(g, 'logit', op=self.readout_op, ntype='var')
+        else:
+            return torch.stack([g_.nodes['var'].data['logit'] for g_ in dgl.unbatch(g)]).squeeze(-1)
