@@ -5,13 +5,17 @@ from contextlib import nullcontext
 from pathlib import Path
 from time import time
 
+import dgl
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data.sampler import SubsetRandomSampler
 import wandb
 from torch.cuda.amp import GradScaler, autocast
+from src.data import load_data
 
 from src.utils import timeit
+from src.dataset import SatsDataset
 
 
 class Trainer(ABC):
@@ -328,6 +332,8 @@ class Trainer(ABC):
         loss_time = 0
         backward_time = 0
 
+        train_size = 0
+
         self.net.train()
         with torch.set_grad_enabled(True):
             for X, y in self.data:
@@ -340,7 +346,7 @@ class Trainer(ABC):
                     forward_time_, y_hat = timeit(self.net)(X)
                     forward_time += forward_time_
 
-                    loss_time_, loss = timeit(self._loss_func)(y_hat, y)
+                    loss_time_, loss = timeit(self._loss_func)(y_hat, y.unsqueeze(-1))
                     loss_time += loss_time_
 
                 if self.mixed_precision:
@@ -348,17 +354,18 @@ class Trainer(ABC):
                     self._scaler.step(self._optim)
                     self._scaler.update()
                 else:
-                    backward_time_, _  = timeit(loss.backwad)()
+                    backward_time_, _  = timeit(loss.backward)()
                     self._optim.step()
                 backward_time += backward_time_
 
                 train_loss += loss.item() * len(y)
+                train_size += len(y)
 
             if self.lr_scheduler is not None:
                 self._scheduler.step()
 
         # scale to data size
-        train_loss = train_loss / len(self.data)
+        train_loss = train_loss / train_size
 
         losses = {
             'all': train_loss,
@@ -377,6 +384,8 @@ class Trainer(ABC):
         forward_time = 0
         loss_time = 0
 
+        val_size = 0
+
         self.net.eval()
         with torch.set_grad_enabled(False):
             for X, y in self.val_data:
@@ -387,14 +396,14 @@ class Trainer(ABC):
                     forward_time_, y_hat = timeit(self.net)(X)
                     forward_time += forward_time_
 
-                    loss_time_, loss = timeit(self._loss_func)(y_hat, y)
+                    loss_time_, loss = timeit(self._loss_func)(y_hat, y.unsqueeze(-1))
                     loss_time += loss_time_
 
                 val_loss += loss.item() * len(y)  # scales to data size
+                val_size += len(y)
 
         # scale to data size
-        len_data = len(self.val_data)
-        val_loss = val_loss / len_data
+        val_loss = val_loss / val_size
         losses = {
             'all': val_loss
         }
@@ -427,3 +436,91 @@ class Trainer(ABC):
         wandb.save(fname)
 
         return fpath
+
+class FactibilityClassificationTrainer(Trainer):
+    def __init__(self, net: nn.Module, instance_fpath="data/raw/97_9.jl",
+                 epochs=5, lr=0.001, batch_size: int = 2**4,
+                 optimizer: str = 'Adam', optimizer_params: dict = None,
+                 loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
+                 lr_scheduler_params: dict = None, mixed_precision=False,
+                 device=None, wandb_project=None, wandb_group=None, logger=None,
+                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        super().__init__(net, epochs, lr, optimizer, optimizer_params,
+                         loss_func, lr_scheduler, lr_scheduler_params,
+                         mixed_precision, device, wandb_project, wandb_group,
+                         logger, checkpoint_every, random_seed, max_loss)
+
+        self.instance_fpath = Path(instance_fpath)
+        self.batch_size = batch_size
+
+        self._add_to_wandb_config({
+            "instance": self.instance_fpath.name,
+            "batch_size": self.batch_size,
+        })
+
+    def prepare_data(self):
+        data = SatsDataset(*load_data(self.instance_fpath))
+
+        n_train = 8000  # leave last job for testing
+
+        train_sampler = SubsetRandomSampler(torch.arange(n_train))
+        test_sampler = SubsetRandomSampler(torch.arange(n_train, len(data)))
+
+        self.data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=train_sampler,
+            batch_size=self.batch_size,
+            drop_last=False
+        )
+        self.val_data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=test_sampler,
+            batch_size=self.batch_size,
+            drop_last=False
+        )
+
+    def validation_pass(self):
+        val_loss = 0
+
+        forward_time = 0
+        loss_time = 0
+
+        val_size = 0
+        hits = 0
+
+        self.net.eval()
+        with torch.set_grad_enabled(False):
+            for X, y in self.val_data:
+                X = X.to(self.device)
+                y = y.to(self.device)
+
+                with self.autocast_if_mp():
+                    forward_time_, y_hat = timeit(self.net)(X)
+                    forward_time += forward_time_
+
+                    loss_time_, loss = timeit(self._loss_func)(y_hat, y.unsqueeze(-1))
+                    loss_time += loss_time_
+
+                    # TODO: refactor loss and metrics computation out of
+                    # self.validation_pass. maybe sth like
+                    # self.get_loss_and_metrics(y_hat, y)?
+                    y_pred = (torch.sigmoid(y_hat) > 0.5).squeeze(1).cpu().numpy().astype(int)
+                    hits += sum(y_pred == y.cpu().numpy())
+
+                val_loss += loss.item() * len(y)  # scales to data size
+                val_size += len(y)
+
+        acc = hits / val_size
+
+        # scale to data size
+        val_loss = val_loss / val_size
+        losses = {
+            'all': val_loss,
+            'accuracy': acc,
+        }
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+        }
+
+        return losses, times

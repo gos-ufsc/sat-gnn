@@ -2,8 +2,8 @@ import numpy as np
 import torch
 import torch.nn
 
-from src.net import Network
-from src.trainer import Trainer
+from src.net import GCN
+from src.trainer import FactibilityClassificationTrainer
 from src.utils import debugger_is_active
 
 
@@ -23,10 +23,12 @@ if __name__ == '__main__':
         torch.autograd.set_detect_anomaly(True)
     else:
         seed = None
-        # wandb_project = 'PROJECT-NAME'
+        wandb_project = 'sat-gnn'
 
-    Trainer(
-        Network(),
+    FactibilityClassificationTrainer(
+        GCN(2, 1),
+        batch_size=2**13,
+        epochs=500,
         wandb_project=wandb_project,
         random_seed=seed,
         device=device,
