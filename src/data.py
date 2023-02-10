@@ -158,10 +158,10 @@ def load_data(instance):
         c.append(np.array(model.getAttr('obj')))
 
         A[job].shape, b[job].shape, c[job].shape
-        # TODO: this relative path here is flimsy, I should do sth about it
-        with open('data/processed/resultados_'+str(job)+'.pkl', 'rb') as f:
+        # TODO: this absolute path here is flimsy, I should do sth about it
+        with open('/home/bruno/sat-gnn/data/processed/resultados_'+str(job)+'.pkl', 'rb') as f:
             resultadosX = pickle.load(f)
-        with open('data/processed/objetivos_'+str(job)+'.pkl', 'rb') as f:
+        with open('/home/bruno/sat-gnn/data/processed/objetivos_'+str(job)+'.pkl', 'rb') as f:
             objetivos.append(pickle.load(f))
 
         resultados[job] = [[] for i in range(len(resultadosX))]
