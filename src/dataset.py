@@ -6,17 +6,13 @@ import torch
 from dgl.data import DGLDataset
 
 
-class SatsDataset(DGLDataset):
-    def __init__(self, As, bs, cs, resultados, objetivos) -> None:
-        super().__init__('test')
+class GraphDataset(DGLDataset):
+    def __init__(self, As, bs, cs, name='Graphs', **kwargs):
+        super().__init__(name, **kwargs)
 
-        assert len(As) == len(bs) == len(cs) == len(resultados) == len(objetivos)
+        assert len(As) == len(bs) == len(cs)
 
         self.gs = [self.make_graph(A, b, c) for A, b, c in zip(As, bs, cs)]
-
-        # parse X and y
-        self._Xs = torch.from_numpy(resultados).double()
-        self._ys =torch.from_numpy((objetivos >= 0).astype(float)).double()
 
     @staticmethod
     def make_graph(A, b, c):
@@ -47,16 +43,67 @@ class SatsDataset(DGLDataset):
         return g
 
     def __len__(self):
+        return len(self.gs)
+
+    def __getitem__(self, idx):
+        return deepcopy(self.gs[idx])
+
+class SatsDataset(GraphDataset):
+    """Classification of valid solutions for IP problems.
+    """
+    def __init__(self, As, bs, cs, resultados, objetivos,
+                 name='Satisfiability of Solutions', **kwargs) -> None:
+        super().__init__(As, bs, cs, name=name, **kwargs)
+
+        assert len(As) == len(resultados) == len(objetivos)
+
+        # parse X and y
+        self._Xs = torch.from_numpy(resultados).double()
+        self._ys =torch.from_numpy((objetivos >= 0).astype(float)).double()
+
+    def __len__(self):
         return self._ys.shape[0] * self._ys.shape[1]
 
     def __getitem__(self, i):
-        i_ = i // 1000
-        j_ = i % 1000
+        i_ = i // self._Xs.shape[1]
+        j_ = i % self._Xs.shape[1]
 
         x = self._Xs[i_][j_]
         y = self._ys[i_][j_]
 
         g = deepcopy(self.gs[i_])
+        g.nodes['var'].data['x'] = x
+
+        return g, y
+
+class VarClassDataset(GraphDataset):
+    """Classification of variable within solution.
+    
+    Provides the problem (A,b,c) and a random candidate solution. The label is 1
+    for each dimension that is equal to the optimal solution.
+    """
+    def __init__(self, As, bs, cs, optimals, samples_per_problem=1e3, name='Optimality of Dimensions',
+                 **kwargs):
+        super().__init__(As, bs, cs, name=name, **kwargs)
+
+        assert len(optimals) == len(As)
+
+        self._optimals = torch.from_numpy(np.array(optimals))
+
+        self.samples_per_problem = int(samples_per_problem)
+
+    def __len__(self):
+        return super().__len__() * self.samples_per_problem
+
+    def __getitem__(self, idx):
+        i = idx // self.samples_per_problem
+
+        opt = self._optimals[i]
+
+        x = torch.randint(0, 2, opt.shape)  # generate random candidate
+        y = (x == opt).type(x.type())
+
+        g = super().__getitem__(i)
         g.nodes['var'].data['x'] = x
 
         return g, y
