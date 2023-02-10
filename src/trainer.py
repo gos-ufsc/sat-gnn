@@ -665,7 +665,8 @@ class EarlyFixingTrainer(Trainer):
         val_loss = val_loss / val_size
         losses = {
             'all': val_loss,
-            'accuracy': acc,
+            'accuracy': acc.mean(),
+            'accuracy_per_dimension': acc,
         }
         times = {
             'forward': forward_time,
