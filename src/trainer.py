@@ -327,12 +327,11 @@ class Trainer(ABC):
 
     def train_pass(self):
         train_loss = 0
+        train_size = 0
 
         forward_time = 0
         loss_time = 0
         backward_time = 0
-
-        train_size = 0
 
         self.net.train()
         with torch.set_grad_enabled(True):
@@ -346,7 +345,7 @@ class Trainer(ABC):
                     forward_time_, y_hat = timeit(self.net)(X)
                     forward_time += forward_time_
 
-                    loss_time_, loss = timeit(self._loss_func)(y_hat, y.unsqueeze(-1))
+                    loss_time_, loss = self.get_loss_and_metrics(y_hat, y)
                     loss_time += loss_time_
 
                 if self.mixed_precision:
@@ -364,12 +363,7 @@ class Trainer(ABC):
             if self.lr_scheduler is not None:
                 self._scheduler.step()
 
-        # scale to data size
-        train_loss = train_loss / train_size
-
-        losses = {
-            'all': train_loss,
-        }
+        losses = self.aggregate_loss_and_metrics(train_loss, train_size)
         times = {
             'forward': forward_time,
             'loss': loss_time,
@@ -377,14 +371,35 @@ class Trainer(ABC):
         }
 
         return losses, times
+    
+    def get_loss_and_metrics(self, y_hat, y, validation=False):
+        loss_time, loss =  timeit(self._loss_func)(y_hat, y)
+
+        if validation:
+            # here you can compute performance metrics
+            return loss_time, loss, None
+        else:
+            return loss_time, loss
+    
+    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
+        # scale to data size
+        loss = loss / size
+
+        losses = {
+            'all': loss
+            # here you can aggregate metrics computed on the validation set and
+            # track them on wandb
+        }
+
+        return losses
 
     def validation_pass(self):
         val_loss = 0
+        val_size = 0
+        val_metrics = list()
 
         forward_time = 0
         loss_time = 0
-
-        val_size = 0
 
         self.net.eval()
         with torch.set_grad_enabled(False):
@@ -396,17 +411,15 @@ class Trainer(ABC):
                     forward_time_, y_hat = timeit(self.net)(X)
                     forward_time += forward_time_
 
-                    loss_time_, loss = timeit(self._loss_func)(y_hat, y.unsqueeze(-1))
+                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, y, validation=True)
                     loss_time += loss_time_
+
+                    val_metrics.append(metrics)
 
                 val_loss += loss.item() * len(y)  # scales to data size
                 val_size += len(y)
 
-        # scale to data size
-        val_loss = val_loss / val_size
-        losses = {
-            'all': val_loss
-        }
+        losses = self.aggregate_loss_and_metrics(val_loss, val_size, val_metrics)
         times = {
             'forward': forward_time,
             'loss': loss_time,
@@ -479,51 +492,29 @@ class FactibilityClassificationTrainer(Trainer):
             drop_last=False
         )
 
-    def validation_pass(self):
-        val_loss = 0
+    def get_loss_and_metrics(self, y_hat, y, validation=False):
+        loss_time, loss =  timeit(self._loss_func)(y_hat, y.unsqueeze(-1))
 
-        forward_time = 0
-        loss_time = 0
+        if validation:
+            y_pred = (torch.sigmoid(y_hat) > 0.5).squeeze(1).cpu().numpy().astype(int)
+            hits = sum(y_pred == y.cpu().numpy())
+            # here you can compute validation-specific metrics
+            return loss_time, loss, hits
+        else:
+            return loss_time, loss
 
-        val_size = 0
-        hits = 0
-
-        self.net.eval()
-        with torch.set_grad_enabled(False):
-            for X, y in self.val_data:
-                X = X.to(self.device)
-                y = y.to(self.device)
-
-                with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(X)
-                    forward_time += forward_time_
-
-                    loss_time_, loss = timeit(self._loss_func)(y_hat, y.unsqueeze(-1))
-                    loss_time += loss_time_
-
-                    # TODO: refactor loss and metrics computation out of
-                    # self.validation_pass. maybe sth like
-                    # self.get_loss_and_metrics(y_hat, y)?
-                    y_pred = (torch.sigmoid(y_hat) > 0.5).squeeze(1).cpu().numpy().astype(int)
-                    hits += sum(y_pred == y.cpu().numpy())
-
-                val_loss += loss.item() * len(y)  # scales to data size
-                val_size += len(y)
-
-        acc = hits / val_size
-
+    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
         # scale to data size
-        val_loss = val_loss / val_size
+        loss = loss / size
+
         losses = {
-            'all': val_loss,
-            'accuracy': acc,
-        }
-        times = {
-            'forward': forward_time,
-            'loss': loss_time,
+            'all': loss
         }
 
-        return losses, times
+        if metrics is not None:
+            losses['accuracy'] = sum(metrics) / size
+
+        return losses
 
 class EarlyFixingTrainer(Trainer):
     def __init__(self, net: nn.Module, instance_fpath="data/raw/97_9.jl",
@@ -575,102 +566,28 @@ class EarlyFixingTrainer(Trainer):
             drop_last=False
         )
 
-    def train_pass(self):
-        train_loss = 0
+    def get_loss_and_metrics(self, y_hat, y, validation=False):
+        loss_time, loss =  timeit(self._loss_func)(y_hat, y.float())
 
-        forward_time = 0
-        loss_time = 0
-        backward_time = 0
+        if validation:
+            y_pred = (torch.sigmoid(y_hat) > 0.5).squeeze(1).cpu().numpy().astype(int)
+            hits = sum(y_pred == y.cpu().numpy())
+            # here you can compute validation-specific metrics
+            return loss_time, loss, hits
+        else:
+            return loss_time, loss
 
-        train_size = 0
-
-        self.net.train()
-        with torch.set_grad_enabled(True):
-            for X, y in self.data:
-                X = X.to(self.device)
-                y = y.to(self.device)
-
-                self._optim.zero_grad()
-
-                with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(X)
-                    forward_time += forward_time_
-
-                    loss_time_, loss = timeit(self._loss_func)(y_hat, y.float())
-                    loss_time += loss_time_
-
-                if self.mixed_precision:
-                    backward_time_, _  = timeit(self._scaler.scale(loss).backward)()
-                    self._scaler.step(self._optim)
-                    self._scaler.update()
-                else:
-                    backward_time_, _  = timeit(loss.backward)()
-                    self._optim.step()
-                backward_time += backward_time_
-
-                train_loss += loss.item() * len(y)
-                train_size += len(y)
-
-            if self.lr_scheduler is not None:
-                self._scheduler.step()
-
+    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
         # scale to data size
-        train_loss = train_loss / train_size
+        loss = loss / size
 
         losses = {
-            'all': train_loss,
-        }
-        times = {
-            'forward': forward_time,
-            'loss': loss_time,
-            'backward': backward_time,
+            'all': loss
         }
 
-        return losses, times
+        if metrics is not None:
+            acc = sum(metrics) / size
+            losses['accuracy'] = acc.mean()
+            losses['accuracy_per_dimension'] = acc
 
-    def validation_pass(self):
-        val_loss = 0
-
-        forward_time = 0
-        loss_time = 0
-
-        val_size = 0
-        hits = 0
-
-        self.net.eval()
-        with torch.set_grad_enabled(False):
-            for X, y in self.val_data:
-                X = X.to(self.device)
-                y = y.to(self.device)
-
-                with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(X)
-                    forward_time += forward_time_
-
-                    loss_time_, loss = timeit(self._loss_func)(y_hat, y.float())
-                    loss_time += loss_time_
-
-                    # TODO: refactor loss and metrics computation out of
-                    # self.validation_pass. maybe sth like
-                    # self.get_loss_and_metrics(y_hat, y)?
-                    y_pred = (torch.sigmoid(y_hat) > 0.5).squeeze(1).cpu().numpy().astype(int)
-                    hits += sum(y_pred == y.cpu().numpy())
-
-                val_loss += loss.item() * len(y)  # scales to data size
-                val_size += len(y)
-
-        acc = hits / val_size
-
-        # scale to data size
-        val_loss = val_loss / val_size
-        losses = {
-            'all': val_loss,
-            'accuracy': acc.mean(),
-            'accuracy_per_dimension': acc,
-        }
-        times = {
-            'forward': forward_time,
-            'loss': loss_time,
-        }
-
-        return losses, times
+        return losses
