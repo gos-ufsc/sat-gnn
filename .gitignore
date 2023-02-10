@@ -190,4 +190,4 @@ wandb/
 .vscode/
 
 # ignore data
-# data/
+data/
