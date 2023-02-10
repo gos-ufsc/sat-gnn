@@ -3,7 +3,7 @@ import torch
 import torch.nn
 
 from src.net import GCN
-from src.trainer import FactibilityClassificationTrainer
+from src.trainer import FactibilityClassificationTrainer, EarlyFixingTrainer
 from src.utils import debugger_is_active
 
 
@@ -25,10 +25,22 @@ if __name__ == '__main__':
         seed = None
         wandb_project = 'sat-gnn'
 
+    # Classification of the graph+candidate solution into feasible or not
     FactibilityClassificationTrainer(
         GCN(2, 1),
-        batch_size=2**13,
-        epochs=500,
+        batch_size=2**5,
+        epochs=1000,
+        wandb_project=wandb_project,
+        random_seed=seed,
+        device=device,
+    ).run()
+
+    # Classification of each dimension of candidate solution into optimal or not
+    EarlyFixingTrainer(
+        GCN(2, 1, readout_op=None),
+        batch_size=2**8,
+        epochs=100,
+        samples_per_problem=1000,
         wandb_project=wandb_project,
         random_seed=seed,
         device=device,
