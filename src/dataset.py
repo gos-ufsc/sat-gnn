@@ -107,3 +107,30 @@ class VarClassDataset(GraphDataset):
         g.nodes['var'].data['x'] = x
 
         return g, y
+
+class ResourceDataset(GraphDataset):
+    def __init__(self, A, b, c, instance, r_std=1, n_samples=1000, name='Variable Resource', **kwargs):
+        super().__init__([A], [b], [c], name, **kwargs)
+        self.problem = (torch.Tensor(A), torch.Tensor(b), torch.Tensor(c))
+
+        self._T = instance['tamanho'][0]
+        self._J = instance['jobs'][0]
+        self.recurso_p = torch.Tensor(instance['recurso_p'][:self._T])
+        self.r_std = float(r_std)
+
+        self.n_samples = n_samples
+
+    def __len__(self):
+        return self.n_samples
+
+    def __getitem__(self, idx):
+        g = super().__getitem__(0)
+
+        # normal variance over the standard value
+        r = self.recurso_p
+        r = torch.normal(r, self.r_std)
+
+        # for each job, for variables x and phi
+        g.nodes['var'].data['x'] = r.unsqueeze(0).repeat(self._J,2).flatten()
+
+        return g, r
