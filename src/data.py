@@ -2,6 +2,7 @@ from pathlib import Path
 import numpy as np
 import pickle
 import re
+import torch
 import gurobipy
 
 
@@ -173,3 +174,36 @@ def load_data(instance):
     resultados = np.array(resultados)
 
     return A, b, c, resultados, objetivos
+
+def get_cannnical_constraints(X, instance):
+    J = instance['jobs'][0]
+    T = instance['tamanho'][0]
+    recurso_p = torch.Tensor(instance['recurso_p'])[:T]
+    uso_p = torch.Tensor(instance['uso_p']) # recurso utilizado por cada tarefa
+
+    # parameters
+    soc_inicial = 0.7
+    limite_inferior = 0.0
+    ef = 0.9
+    v_bat = 3.6
+    q = 5
+    bat_usage = 5
+
+    # format candidate solution for each job
+    n_batch = X.shape[0]
+    X = X.view(n_batch, J, T)
+
+    consumo = torch.bmm(uso_p.unsqueeze(0).repeat(n_batch,1,1), X).squeeze(1)
+    recurso_total = recurso_p + bat_usage * v_bat
+
+    bat = recurso_p - consumo
+    i = bat / v_bat
+
+    soc = torch.zeros_like(consumo)
+    soc[:,0] = soc_inicial
+    for t in range(1,T):
+        soc[:,t] = soc[:,t-1] + (ef / q) * (i[:,t] / 60)
+
+    g = torch.hstack((consumo - recurso_total, soc - 1, limite_inferior - soc))
+
+    return g
