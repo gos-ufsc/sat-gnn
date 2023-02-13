@@ -64,11 +64,12 @@ def oracle(jobs, instance):
     x = {}
     phi = {}
     for j in J_SUBSET:
-            for t in range(T):
-                    x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1, vtype=gurobipy.GRB.BINARY)
-
-    for j in J_SUBSET:
-        for t in range(T):                
+        # the order in which we add the variables matter. I want all variables
+        # associated with a given job to be together,
+        # like x(0,0),...,x(0,-1),phi(0,0),...phi(0,-1),x(1,0),...,x(1,-1),phi(1,0),...
+        for t in range(T):
+                x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1, vtype=gurobipy.GRB.BINARY)
+        for t in range(T):
                 phi[j,t] = model.addVar(vtype=gurobipy.GRB.BINARY, name="phi(%s,%s)" % (j, t),)
 
     # soc_inicial = 0.7
