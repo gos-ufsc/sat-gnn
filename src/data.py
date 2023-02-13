@@ -176,11 +176,13 @@ def load_data(instance):
 
     return A, b, c, resultados, objetivos
 
-def get_cannnical_constraints(X, instance):
+def get_coupling_constraints(X, instance, r=None):
     J = instance['jobs'][0]
     T = instance['tamanho'][0]
-    recurso_p = torch.Tensor(instance['recurso_p'])[:T]
     uso_p = torch.Tensor(instance['uso_p']) # recurso utilizado por cada tarefa
+
+    if r is None:
+        r = torch.Tensor(instance['recurso_p'])[:T]
 
     # parameters
     soc_inicial = 0.7
@@ -192,12 +194,13 @@ def get_cannnical_constraints(X, instance):
 
     # format candidate solution for each job
     n_batch = X.shape[0]
-    X = X.view(n_batch, J, T)
+    X = X.view(n_batch, J, 2 * T)
+    X = X[:,:,:T]  # discard phi variables
 
     consumo = torch.bmm(uso_p.unsqueeze(0).repeat(n_batch,1,1), X).squeeze(1)
-    recurso_total = recurso_p + bat_usage * v_bat
+    recurso_total = r + bat_usage * v_bat
 
-    bat = recurso_p - consumo
+    bat = r - consumo
     i = bat / v_bat
 
     soc = torch.zeros_like(consumo)
