@@ -26,7 +26,7 @@ def load_instance(fpath="data/raw/97_9.jl"):
 
     return instancia
 
-def oracle(job, instance):
+def oracle(jobs, instance):
     if isinstance(instance, str) or isinstance(instance, Path):
         instance = load_instance(instance)
 
@@ -55,9 +55,13 @@ def oracle(job, instance):
     model.setParam('TimeLimit', 120)
     # create decision variables
 
+    if isinstance(jobs, list):
+        J_SUBSET = jobs
+    else:
+        J_SUBSET = [jobs]
+
     x = {}
     phi = {}
-    J_SUBSET = [job]
     for j in J_SUBSET:
             for t in range(T):
                     x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1, vtype=gurobipy.GRB.BINARY)
@@ -66,12 +70,12 @@ def oracle(job, instance):
         for t in range(T):                
                 phi[j,t] = model.addVar(vtype=gurobipy.GRB.BINARY, name="phi(%s,%s)" % (j, t),)
 
-    soc_inicial = 0.7
-    limite_inferior = 0.0
-    ef = 0.9 
-    v_bat = 3.6 
-    q = 5
-    bat_usage = 5
+    # soc_inicial = 0.7
+    # limite_inferior = 0.0
+    # ef = 0.9 
+    # v_bat = 3.6 
+    # q = 5
+    # bat_usage = 5
 
     # set objective
     model.setObjective(sum(priority[j] * x[j,t] for j in J_SUBSET for t in range(T)), gurobipy.GRB.MAXIMIZE)
@@ -125,15 +129,7 @@ def oracle(job, instance):
                 model.addConstr(sum(x[j,t_] for t_ in range(t, T)) >= (T - t) * phi[j,t])
 
     model.update()
-    # model.optimize()
-    #print(model.ObjVal)
-    # resultados = []
-    # objetivos = []
-    # for i in range(model.solCount):
-    #     model.Params.SolutionNumber = i
-    #     objetivo = model.PoolObjVal
-    #     resultados.append([v.xn for v in model.getVars()])
-    #     objetivos.append(objetivo)
+
     return model
 
 def load_data(instance):
