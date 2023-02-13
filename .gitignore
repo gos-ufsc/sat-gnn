@@ -191,3 +191,6 @@ wandb/
 
 # ignore data
 data/
+
+# ignore models
+*.pth
