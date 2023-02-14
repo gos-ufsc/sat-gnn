@@ -179,7 +179,7 @@ def load_data(instance):
 def get_coupling_constraints(X, instance, r=None):
     J = instance['jobs'][0]
     T = instance['tamanho'][0]
-    uso_p = torch.Tensor(instance['uso_p']) # recurso utilizado por cada tarefa
+    uso_p = torch.Tensor(instance['uso_p']).to(X) # recurso utilizado por cada tarefa
 
     if r is None:
         r = torch.Tensor(instance['recurso_p'])[:T]
@@ -203,7 +203,7 @@ def get_coupling_constraints(X, instance, r=None):
     bat = r - consumo
     i = bat / v_bat
 
-    soc = torch.zeros_like(consumo)
+    soc = torch.zeros_like(consumo).to(X)
     soc[:,0] = soc_inicial
     for t in range(1,T):
         soc[:,t] = soc[:,t-1] + (ef / q) * (i[:,t] / 60)
