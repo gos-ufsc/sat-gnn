@@ -12,10 +12,10 @@ import torch.nn as nn
 from torch.utils.data.sampler import SubsetRandomSampler
 import wandb
 from torch.cuda.amp import GradScaler, autocast
-from src.data import load_data
 
+from src.data import load_data, oracle, load_instance, get_coupling_constraints
 from src.utils import timeit
-from src.dataset import SatsDataset, VarClassDataset
+from src.dataset import SatsDataset, VarClassDataset, ResourceDataset
 
 
 class Trainer(ABC):
@@ -589,5 +589,181 @@ class EarlyFixingTrainer(Trainer):
             acc = sum(metrics) / size
             losses['accuracy'] = acc.mean()
             losses['accuracy_per_dimension'] = acc
+
+        return losses
+
+class VariableResourceTrainer(EarlyFixingTrainer):
+    def __init__(self, net: nn.Module, instance_fpath="data/raw/97_9.jl",
+                 epochs=5, lr=0.001, batch_size: int = 2 ** 4, mu0 = 1, lambda0=0,
+                 samples_per_problem: int = 1000, optimizer: str = 'Adam',
+                 optimizer_params: dict = None, lr_scheduler: str = None,
+                 lr_scheduler_params: dict = None, mixed_precision=False,
+                 device=None, wandb_project=None, wandb_group=None, logger=None,
+                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        super().__init__(net, instance_fpath, epochs, lr, batch_size,
+                         samples_per_problem, optimizer, optimizer_params,
+                         'MSELoss', lr_scheduler, lr_scheduler_params,
+                         mixed_precision, device, wandb_project, wandb_group,
+                         logger, checkpoint_every, random_seed, max_loss)
+
+        self.mu0 = mu0
+        self.lambda0 = lambda0
+
+    def prepare_data(self):
+        # define problem
+        self.instance = load_instance(self.instance_fpath)
+
+        model = oracle(list(range(self.instance['jobs'][0])), self.instance)
+
+        A = model.getA().toarray()
+        b = np.array(model.getAttr('rhs'))
+        c = np.array(model.getAttr('obj'))
+
+        data = ResourceDataset(A, b, c, self.instance,
+                               n_samples=self.samples_per_problem)
+
+        # AugLag parameters
+        self.lambdak = {tuple(r.tolist()): None for r in data.rs}
+        self.muk = self.mu0
+        self.best_cons_for_update = torch.inf
+
+        # format model arrays to standard constraints
+        constraints_sense = np.array([ci.sense for ci in model.getConstrs()])
+
+        A[constraints_sense == '<'] *= -1
+        b[constraints_sense == '<'] *= -1
+
+        A_ineq = A[constraints_sense != '=']
+        b_ineq = b[constraints_sense != '=']
+        A_eq = A[constraints_sense == '=']
+        b_eq = b[constraints_sense == '=']
+
+        self.model_data = (
+            torch.Tensor(A_ineq).to(self.device),
+            torch.Tensor(A_eq).to(self.device),
+            torch.Tensor(b_ineq).to(self.device),
+            torch.Tensor(b_eq).to(self.device),
+            torch.Tensor(c).to(self.device)
+        )
+
+        # leave last job for testing
+        train_sampler = SubsetRandomSampler(torch.arange(self.samples_per_problem - 1))
+        test_sampler = SubsetRandomSampler(torch.arange(self.samples_per_problem - 1, self.samples_per_problem))
+
+        self.data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=train_sampler,
+            batch_size=self.batch_size,
+            drop_last=False
+        )
+        self.val_data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=test_sampler,
+            batch_size=self.batch_size,
+            drop_last=False
+        )
+
+    def _run_epoch(self):
+        # if (self._e + 1) % 101 == 0:
+        #     self.muk *= 2
+        #     self.lambdak += self.muk * self.last_cons.mean(0)
+
+        return super()._run_epoch()
+
+    def get_loss_and_metrics(self, x_hat, r, validation=False):
+        start = time()
+        A_ineq, A_eq, b_ineq, b_eq, c = self.model_data
+        A_ineq = A_ineq.to(x_hat)
+        A_eq = A_eq.to(x_hat)
+        b_ineq = b_ineq.to(x_hat)
+        b_eq = b_eq.to(x_hat)
+        c = c.to(x_hat)
+
+        x = torch.sigmoid(x_hat)
+
+        # compute contraints
+        g = get_coupling_constraints(x, self.instance, r)
+
+        C_ineq = torch.hstack((x @ A_ineq.T - b_ineq, g))
+        C_eq = x @ A_eq.T - b_eq
+
+        C = torch.hstack((C_ineq, C_eq))
+
+        # get Lag. multipliers estimate for the batch
+        batch_lambdak = list()
+        for r_ in r:
+            i = tuple(r_.tolist())
+            lk = self.lambdak[i]
+            if lk is None:
+                self.lambdak[i] = self.lambda0 * torch.ones_like(C)[0]
+                lk = self.lambdak[i]
+
+            batch_lambdak.append(lk)
+        batch_lambdak = torch.stack(batch_lambdak)
+
+        batch_lambdak_ineq = batch_lambdak[:,:C_ineq.shape[1]]
+        batch_lambdak_eq = batch_lambdak[:,C_ineq.shape[1]:]
+
+        if (self._e + 1) % 21 == 0:
+            # update Lag. multipliers estimate
+            with torch.no_grad():
+                batch_lambdak_ineq = torch.max(batch_lambdak_ineq - C_ineq / self.muk,
+                                               torch.zeros_like(C_ineq))
+                batch_lambdak_eq = batch_lambdak_eq - C_eq / self.muk
+
+                batch_lambdak = torch.hstack((batch_lambdak_ineq, batch_lambdak_eq))
+                for j, r_ in enumerate(r):
+                    i = tuple(r_.tolist())
+                    self.lambdak[i] = batch_lambdak[j]
+
+        s_ineq = torch.max(C_ineq - self.muk * batch_lambdak_ineq,
+                           torch.zeros_like(C_ineq))
+
+        # compute the augmented lagrangian following Nocedal and Wright
+        aug_lagragian = -x @ c  # cost = - objective (maximization problem)
+        # aug_lagragian = 0  # ignore cost for now
+        aug_lagragian += (1 / (2 * self.muk))*(C_ineq - s_ineq).pow(2).sum(-1)
+        aug_lagragian += -(batch_lambdak_ineq * (C_ineq - s_ineq)).sum(-1)
+        aug_lagragian += (1 / (2 * self.muk))*C_eq.pow(2).sum(-1)
+        aug_lagragian += -(batch_lambdak_eq * C_eq).sum(-1)
+        aug_lagragian = aug_lagragian.mean()  # batch aggregation
+
+        loss_time = time() - start
+        if validation:
+            curr_muk = self.muk
+
+            if (self._e + 1) % 21 == 0:
+                # update muk after every epoch
+                with torch.no_grad():
+                    C = torch.hstack((C_ineq - s_ineq, C_eq))
+                if C.norm(2).item() <= 0.9 * self.best_cons_for_update:
+                    self.best_cons_for_update = C.norm(2).item()
+                else:
+                    self.muk *= .9
+
+            # here you can compute validation-specific metrics
+            with torch.no_grad():
+                obj = x @ c
+            return loss_time, aug_lagragian, (obj, C_ineq, C_eq, curr_muk)
+        else:
+            return loss_time, aug_lagragian
+
+    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
+        # scale to data size
+        loss = loss / size
+
+        losses = {
+            'all': loss
+            # here you can aggregate metrics computed on the validation set and
+            # track them on wandb
+        }
+
+        if metrics is not None:
+            obj, C_ineq, C_eq, muk = metrics[0]
+            losses['obj'] = obj
+            losses['mu_k'] = muk
+            losses['best_C'] = self.best_cons_for_update
+            losses['valid_ineq_ratio'] = (C_ineq >= 0.).sum() / C_ineq.shape[-1]
+            losses['valid_eq_ratio'] = (C_eq >= 0.).sum() / C_eq.shape[-1]
 
         return losses
