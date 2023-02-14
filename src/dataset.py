@@ -113,12 +113,16 @@ class ResourceDataset(GraphDataset):
         super().__init__([A], [b], [c], name, **kwargs)
         self.problem = (torch.Tensor(A), torch.Tensor(b), torch.Tensor(c))
 
+        self.n_samples = n_samples
+
         self._T = instance['tamanho'][0]
         self._J = instance['jobs'][0]
         self.recurso_p = torch.Tensor(instance['recurso_p'][:self._T])
-        self.r_std = float(r_std)
+        
+        r = self.recurso_p.unsqueeze(0).repeat(self.n_samples-1, 1)
+        r = torch.normal(r, r_std)
 
-        self.n_samples = n_samples
+        self.rs = torch.vstack((r, self.recurso_p.unsqueeze(0)))
 
     def __len__(self):
         return self.n_samples
@@ -127,8 +131,7 @@ class ResourceDataset(GraphDataset):
         g = super().__getitem__(0)
 
         # normal variance over the standard value
-        r = self.recurso_p
-        r = torch.normal(r, self.r_std)
+        r = self.rs[idx]
 
         # for each job, for variables x and phi
         g.nodes['var'].data['x'] = r.unsqueeze(0).repeat(self._J,2).flatten()
