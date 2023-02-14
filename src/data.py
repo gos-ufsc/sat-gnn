@@ -208,6 +208,6 @@ def get_coupling_constraints(X, instance, r=None):
     for t in range(1,T):
         soc[:,t] = soc[:,t-1] + (ef / q) * (i[:,t] / 60)
 
-    g = torch.hstack((consumo - recurso_total, soc - 1, limite_inferior - soc))
+    g = torch.hstack((recurso_total - consumo, 1 - soc, soc - limite_inferior))
 
     return g
