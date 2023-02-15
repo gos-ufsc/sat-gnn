@@ -126,12 +126,14 @@ class ResourceDataset(DGLDataset):
 
         self.rs = torch.vstack((r, self.recurso_p.unsqueeze(0)))
 
+        self.models = list()
         self.gs = list()
         for recurso in self.rs.numpy():
             m = get_model(list(range(self._J)), instance, coupling=True,
                           recurso=recurso)
 
             self.gs.append(self.make_graph(m))
+            self.models.append(m)
 
     @staticmethod
     def make_graph(model):
