@@ -6,16 +6,17 @@ from pathlib import Path
 from time import time
 
 import dgl
+import gurobipy
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data.sampler import SubsetRandomSampler
 import wandb
 from torch.cuda.amp import GradScaler, autocast
+from torch.utils.data.sampler import SubsetRandomSampler
 
-from src.data import load_data, get_model, load_instance, get_coupling_constraints
+from src.data import get_soc, get_model, load_data, load_instance
+from src.dataset import ResourceDataset, SatsDataset, VarClassDataset
 from src.utils import timeit
-from src.dataset import SatsDataset, VarClassDataset, ResourceDataset
 
 
 class Trainer(ABC):
@@ -616,38 +617,46 @@ class VariableResourceTrainer(EarlyFixingTrainer):
         # define problem
         self.instance = load_instance(self.instance_fpath)
 
-        model = get_model(list(range(self.instance['jobs'][0])), self.instance)
-
-        A = model.getA().toarray()
-        b = np.array(model.getAttr('rhs'))
-        c = np.array(model.getAttr('obj'))
-
-        data = ResourceDataset(A, b, c, self.instance,
-                               n_samples=self.samples_per_problem)
+        data = ResourceDataset(self.instance, n_samples=self.samples_per_problem)
 
         # AugLag parameters
-        self.lambdak = {tuple(r.tolist()): None for r in data.rs}
+        self.lambdak = dict()
         self.muk = self.mu0
         self.best_cons_for_update = torch.inf
 
-        # format model arrays to standard constraints
-        constraints_sense = np.array([ci.sense for ci in model.getConstrs()])
+        self.model_data = dict()
+        for model, r in zip(data.models, data.rs):
+            r_i = tuple(r.tolist())
 
-        A[constraints_sense == '<'] *= -1
-        b[constraints_sense == '<'] *= -1
+            A = model.getA().toarray()
+            b = np.array(model.getAttr('rhs'))
+            c = np.array(model.getAttr('obj'))
 
-        A_ineq = A[constraints_sense != '=']
-        b_ineq = b[constraints_sense != '=']
-        A_eq = A[constraints_sense == '=']
-        b_eq = b[constraints_sense == '=']
+            constraints_sense = np.array([ci.sense for ci in model.getConstrs()])
 
-        self.model_data = (
-            torch.Tensor(A_ineq).to(self.device),
-            torch.Tensor(A_eq).to(self.device),
-            torch.Tensor(b_ineq).to(self.device),
-            torch.Tensor(b_eq).to(self.device),
-            torch.Tensor(c).to(self.device)
-        )
+            A[constraints_sense == '<'] *= -1
+            b[constraints_sense == '<'] *= -1
+
+            soc_vars_mask = np.array(['soc' in v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()])
+
+            # leave SoC-related columns to the end
+            A = np.concatenate([A[:,~soc_vars_mask], A[:,soc_vars_mask]], -1)
+            c = np.concatenate([c[~soc_vars_mask], c[soc_vars_mask]], -1)
+
+            A_ineq = A[constraints_sense != '=']
+            b_ineq = b[constraints_sense != '=']
+            A_eq = A[constraints_sense == '=']
+            b_eq = b[constraints_sense == '=']
+
+            self.model_data[r_i] = (
+                torch.Tensor(A_ineq).to(self.device).double(),
+                torch.Tensor(A_eq).to(self.device).double(),
+                torch.Tensor(b_ineq).to(self.device).double(),
+                torch.Tensor(b_eq).to(self.device).double(),
+                torch.Tensor(c).to(self.device).double()
+            )
+
+            self.lambdak[r_i] = self.lambda0 * torch.ones(A.shape[0]).to(self.device)
 
         # leave last job for testing
         train_sampler = SubsetRandomSampler(torch.arange(self.samples_per_problem - 1))
@@ -666,43 +675,50 @@ class VariableResourceTrainer(EarlyFixingTrainer):
             drop_last=False
         )
 
-    def _run_epoch(self):
-        # if (self._e + 1) % 101 == 0:
-        #     self.muk *= 2
-        #     self.lambdak += self.muk * self.last_cons.mean(0)
-
-        return super()._run_epoch()
-
     def get_loss_and_metrics(self, x_hat, r, validation=False):
         start = time()
-        A_ineq, A_eq, b_ineq, b_eq, c = self.model_data
-        A_ineq = A_ineq.to(x_hat)
-        A_eq = A_eq.to(x_hat)
-        b_ineq = b_ineq.to(x_hat)
-        b_eq = b_eq.to(x_hat)
-        c = c.to(x_hat)
 
         x = torch.sigmoid(x_hat)
 
-        # compute contraints
-        g = get_coupling_constraints(x, self.instance, r)
-
-        C_ineq = torch.hstack((x @ A_ineq.T - b_ineq, g))
-        C_eq = x @ A_eq.T - b_eq
-
-        C = torch.hstack((C_ineq, C_eq))
-
-        # get Lag. multipliers estimate for the batch
+        As_ineq = list()
+        As_eq = list()
+        bs_ineq = list()
+        bs_eq = list()
+        cs = list()
         batch_lambdak = list()
         for r_ in r:
             i = tuple(r_.tolist())
+
+            # get model data
+            A_ineq, A_eq, b_ineq, b_eq, c = self.model_data[i]
+            As_ineq.append(A_ineq)
+            As_eq.append(A_eq)
+            bs_ineq.append(b_ineq)
+            bs_eq.append(b_eq)
+            cs.append(c)
+
+            # get Lag. multipliers estimate for the batch
             lk = self.lambdak[i]
             if lk is None:
-                self.lambdak[i] = self.lambda0 * torch.ones_like(C)[0]
+                self.lambdak[i] = self.lambda0 * torch.ones(A_ineq.shape[0] + A_eq.shape[0])
                 lk = self.lambdak[i]
 
             batch_lambdak.append(lk)
         batch_lambdak = torch.stack(batch_lambdak)
+
+        batch_A_ineq = torch.stack(As_ineq)
+        batch_A_eq = torch.stack(As_eq)
+        batch_b_ineq = torch.stack(bs_ineq)
+        batch_b_eq = torch.stack(bs_eq)
+        batch_c = torch.stack(cs)
+
+        soc = get_soc(x, self.instance, r)
+        soc = soc[:,1:]  # discard initial SoC
+
+        x_with_soc = torch.hstack((x, soc))
+
+        C_ineq = torch.bmm(batch_A_ineq, x_with_soc.unsqueeze(-1)).squeeze(-1) - batch_b_ineq
+        C_eq = torch.bmm(batch_A_eq, x_with_soc.unsqueeze(-1)).squeeze(-1) - batch_b_eq
 
         batch_lambdak_ineq = batch_lambdak[:,:C_ineq.shape[1]]
         batch_lambdak_eq = batch_lambdak[:,C_ineq.shape[1]:]
@@ -724,7 +740,8 @@ class VariableResourceTrainer(EarlyFixingTrainer):
                            torch.zeros_like(C_ineq))
 
         # compute the augmented lagrangian following Nocedal and Wright
-        aug_lagragian = -x @ c  # cost = - objective (maximization problem)
+        obj = (x_with_soc * batch_c).sum(-1)
+        aug_lagragian = -obj  # cost = - objective (maximization problem)
         # aug_lagragian = 0  # ignore cost for now
         aug_lagragian += (1 / (2 * self.muk))*(C_ineq - s_ineq).pow(2).sum(-1)
         aug_lagragian += -(batch_lambdak_ineq * (C_ineq - s_ineq)).sum(-1)
@@ -749,7 +766,6 @@ class VariableResourceTrainer(EarlyFixingTrainer):
 
             # here you can compute validation-specific metrics
             with torch.no_grad():
-                obj = x @ c
                 C = torch.hstack((C_ineq - s_ineq, C_eq))
                 C = C.norm(2).item()
             return loss_time, aug_lagragian, (obj, C, C_ineq, C_eq, curr_muk)
