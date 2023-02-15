@@ -226,3 +226,36 @@ def get_coupling_constraints(X, instance, r=None):
     g = torch.hstack((recurso_total - consumo, 1 - soc, soc - limite_inferior))
 
     return g
+
+def get_soc(X, instance, r):
+    J = instance['jobs'][0]
+    T = instance['tamanho'][0]
+    uso_p = torch.Tensor(instance['uso_p']).to(X) # recurso utilizado por cada tarefa
+
+    if r is None:
+        r = torch.Tensor(instance['recurso_p'])[:T]
+
+    # parameters
+    soc_inicial = 0.7
+    limite_inferior = 0.0
+    ef = 0.9
+    v_bat = 3.6
+    q = 5
+    bat_usage = 5
+
+    # format candidate solution for each job
+    n_batch = X.shape[0]
+    X = X.view(n_batch, J, 2 * T)
+    X = X[:,:,:T]  # discard phi variables
+
+    consumo = torch.bmm(uso_p.unsqueeze(0).repeat(n_batch,1,1), X).squeeze(1)
+
+    bat = r - consumo
+    i = bat / v_bat
+
+    soc = torch.zeros_like(consumo).to(X)
+    soc[:,0] = soc_inicial
+    for t in range(1,T):
+        soc[:,t] = soc[:,t-1] + (ef / q) * (i[:,t] / 60)
+
+    return soc
