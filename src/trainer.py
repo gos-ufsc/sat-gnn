@@ -13,7 +13,7 @@ from torch.utils.data.sampler import SubsetRandomSampler
 import wandb
 from torch.cuda.amp import GradScaler, autocast
 
-from src.data import load_data, oracle, load_instance, get_coupling_constraints
+from src.data import load_data, get_model, load_instance, get_coupling_constraints
 from src.utils import timeit
 from src.dataset import SatsDataset, VarClassDataset, ResourceDataset
 
@@ -616,7 +616,7 @@ class VariableResourceTrainer(EarlyFixingTrainer):
         # define problem
         self.instance = load_instance(self.instance_fpath)
 
-        model = oracle(list(range(self.instance['jobs'][0])), self.instance)
+        model = get_model(list(range(self.instance['jobs'][0])), self.instance)
 
         A = model.getA().toarray()
         b = np.array(model.getAttr('rhs'))
@@ -719,6 +719,7 @@ class VariableResourceTrainer(EarlyFixingTrainer):
                     i = tuple(r_.tolist())
                     self.lambdak[i] = batch_lambdak[j]
 
+        # TODO: try implicit s through \psi formula
         s_ineq = torch.max(C_ineq - self.muk * batch_lambdak_ineq,
                            torch.zeros_like(C_ineq))
 
@@ -767,6 +768,7 @@ class VariableResourceTrainer(EarlyFixingTrainer):
 
         if metrics is not None:
             obj, C, C_ineq, C_eq, muk = metrics[0]
+            # TODO: compute distance from integrality
             losses['obj'] = obj.item()
             losses['C'] = C
             losses['mu_k'] = muk

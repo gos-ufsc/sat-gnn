@@ -27,14 +27,17 @@ def load_instance(fpath="data/raw/97_9.jl"):
 
     return instancia
 
-def oracle(jobs, instance):
+def get_model(jobs, instance, coupling=False, recurso=None):
     if isinstance(instance, str) or isinstance(instance, Path):
         instance = load_instance(instance)
 
     colunas_ = []
     lb = 0
     T = instance['tamanho'][0]
-    recurso_p = instance['recurso_p']
+    if recurso is None:
+        recurso_p = instance['recurso_p']
+    else:
+        recurso_p = recurso
     # print(recurso_p)
 
     priority = instance['priority'] # prioridade de cada tarefa
@@ -72,12 +75,12 @@ def oracle(jobs, instance):
         for t in range(T):
                 phi[j,t] = model.addVar(vtype=gurobipy.GRB.BINARY, name="phi(%s,%s)" % (j, t),)
 
-    # soc_inicial = 0.7
-    # limite_inferior = 0.0
-    # ef = 0.9 
-    # v_bat = 3.6 
-    # q = 5
-    # bat_usage = 5
+    soc_inicial = 0.7
+    limite_inferior = 0.0
+    ef = 0.9 
+    v_bat = 3.6 
+    q = 5
+    bat_usage = 5
 
     # set objective
     model.setObjective(sum(priority[j] * x[j,t] for j in J_SUBSET for t in range(T)), gurobipy.GRB.MAXIMIZE)
@@ -130,6 +133,18 @@ def oracle(jobs, instance):
         for t in range(T - min_cpu_time[j] + 1, T):
                 model.addConstr(sum(x[j,t_] for t_ in range(t, T)) >= (T - t) * phi[j,t])
 
+    if coupling:
+        for t in range(T):
+            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) <= recurso_p[t] + bat_usage * v_bat)
+
+        soc = list()
+        soc.append(soc_inicial)
+        for t in range(1,T):
+            soc.append(model.addVar(name="soc(%s)" % (t,), lb=limite_inferior, ub=1))
+
+            bat_t = recurso_p[t] - sum(uso_p[j] * x[j,t] for j in J_SUBSET)
+            model.addConstr(soc[t] == soc[t-1] + (bat_t / v_bat) * (ef / (60 * q)))
+
     model.update()
 
     return model
@@ -148,7 +163,7 @@ def load_data(instance):
     c = []
     objetivos = []
     for job in range(JOBS):
-        model = oracle(job, instance)
+        model = get_model(job, instance)
         #print(resultados, objetivos)
         A.append(model.getA().toarray())
         #resultados.append(np.array(resultados))
