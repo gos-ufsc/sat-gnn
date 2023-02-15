@@ -1,9 +1,12 @@
 from copy import deepcopy
 
 import dgl
+import gurobipy
 import numpy as np
 import torch
 from dgl.data import DGLDataset
+
+from src.data import get_model
 
 
 class GraphDataset(DGLDataset):
@@ -108,32 +111,86 @@ class VarClassDataset(GraphDataset):
 
         return g, y
 
-class ResourceDataset(GraphDataset):
-    def __init__(self, A, b, c, instance, r_std=.1, n_samples=1000, name='Variable Resource', **kwargs):
-        super().__init__([A], [b], [c], name, **kwargs)
-        self.problem = (torch.Tensor(A), torch.Tensor(b), torch.Tensor(c))
+class ResourceDataset(DGLDataset):
+    def __init__(self, instance, r_std=.1, n_samples=1000, name='Variable Resource', **kwargs):
+        super().__init__(name, **kwargs)
 
         self.n_samples = n_samples
 
         self._T = instance['tamanho'][0]
         self._J = instance['jobs'][0]
         self.recurso_p = torch.Tensor(instance['recurso_p'][:self._T])
-        
+
         r = self.recurso_p.unsqueeze(0).repeat(self.n_samples-1, 1)
         r = torch.normal(r, r_std)
 
         self.rs = torch.vstack((r, self.recurso_p.unsqueeze(0)))
 
+        self.gs = list()
+        for recurso in self.rs.numpy():
+            m = get_model(list(range(self._J)), instance, coupling=True,
+                          recurso=recurso)
+
+            self.gs.append(self.make_graph(m))
+
+    @staticmethod
+    def make_graph(model):
+        A = model.getA().toarray()
+        b = np.array(model.getAttr('rhs'))
+        c = np.array(model.getAttr('obj'))
+
+        # get only real (non-null) edges
+        A_ = A.flatten()
+        edges = np.indices(A.shape)  # cons -> vars
+        edges = edges.reshape(edges.shape[0],-1)
+        edges = edges[:,A_ != 0]
+        # edges = torch.from_numpy(edges)
+
+        edge_weights = A_[A_ != 0]
+
+        soc_vars_mask = np.array(['soc' in v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()])
+        soc_vars = np.arange(soc_vars_mask.shape[0])[soc_vars_mask]
+        var_vars = np.arange(soc_vars_mask.shape[0])[~soc_vars_mask]
+        soc_edges_mask = np.isin(edges.T[:,1], soc_vars)
+
+        var_edges = edges[:,~soc_edges_mask]
+        soc_edges = edges[:,soc_edges_mask]
+
+        # translate soc/var nodes index to 0-based
+        soc_edges[1] = np.array(list(map(
+            dict(zip(soc_vars, np.arange(soc_vars.shape[0]))).get,
+            soc_edges[1]
+        )))
+        var_edges[1] = np.array(list(map(
+            dict(zip(var_vars, np.arange(var_vars.shape[0]))).get,
+            var_edges[1]
+        )))
+
+        g = dgl.heterograph({
+            ('var', 'v2c', 'con'): (var_edges[1], var_edges[0]),
+            ('con', 'c2v', 'var'): (var_edges[0], var_edges[1]),
+            ('soc', 's2c', 'con'): (soc_edges[1], soc_edges[0]),
+            ('con', 'c2s', 'soc'): (soc_edges[0], soc_edges[1]),
+        })
+
+        soc_edge_weights = edge_weights[soc_edges_mask]
+        g.edges['s2c'].data['A'] = torch.from_numpy(soc_edge_weights)
+        g.edges['c2s'].data['A'] = torch.from_numpy(soc_edge_weights)
+
+        var_edge_weights = edge_weights[~soc_edges_mask]
+        g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_weights)
+        g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_weights)
+
+        g.nodes['con'].data['b'] = torch.from_numpy(b)
+
+        g.nodes['var'].data['c'] = torch.from_numpy(c[~soc_vars_mask])
+        g.nodes['soc'].data['c'] = torch.from_numpy(c[soc_vars_mask])
+
+        return g
+
     def __len__(self):
-        return self.n_samples
+        return len(self.gs)
 
     def __getitem__(self, idx):
-        g = super().__getitem__(0)
+        return self.gs[idx], self.rs[idx]
 
-        # normal variance over the standard value
-        r = self.rs[idx]
-
-        # for each job, for variables x and phi
-        g.nodes['var'].data['x'] = r.unsqueeze(0).repeat(self._J,2).flatten()
-
-        return g, r
