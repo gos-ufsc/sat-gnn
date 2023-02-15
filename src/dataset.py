@@ -109,7 +109,7 @@ class VarClassDataset(GraphDataset):
         return g, y
 
 class ResourceDataset(GraphDataset):
-    def __init__(self, A, b, c, instance, r_std=1, n_samples=1000, name='Variable Resource', **kwargs):
+    def __init__(self, A, b, c, instance, r_std=.1, n_samples=1000, name='Variable Resource', **kwargs):
         super().__init__([A], [b], [c], name, **kwargs)
         self.problem = (torch.Tensor(A), torch.Tensor(b), torch.Tensor(c))
 
