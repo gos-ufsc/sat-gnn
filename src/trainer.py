@@ -175,15 +175,7 @@ class Trainer(ABC):
     def setup_training(self):
         self.l.info('Setting up training')
 
-        Optimizer = eval(f"torch.optim.{self.optimizer}")
-        self._optim = Optimizer(
-            filter(lambda p: p.requires_grad, self.net.parameters()),
-            lr=self.lr
-        )
-
-        if self.lr_scheduler is not None:
-            Scheduler = eval(f"torch.optim.lr_scheduler.{self.lr_scheduler}")
-            self._scheduler = Scheduler(self._optim, **self.lr_scheduler_params)
+        self._load_optim()
 
         if self._log_to_wandb:
             self._add_to_wandb_config({
@@ -214,6 +206,17 @@ class Trainer(ABC):
         self.prepare_data()
 
         self._is_initalized = True
+
+    def _load_optim(self):
+        Optimizer = eval(f"torch.optim.{self.optimizer}")
+        self._optim = Optimizer(
+            filter(lambda p: p.requires_grad, self.net.parameters()),
+            lr=self.lr
+        )
+
+        if self.lr_scheduler is not None:
+            Scheduler = eval(f"torch.optim.lr_scheduler.{self.lr_scheduler}")
+            self._scheduler = Scheduler(self._optim, **self.lr_scheduler_params)
 
     def _add_to_wandb_config(self, d: dict):
         if not hasattr(self, '_wandb_config'):
@@ -704,7 +707,7 @@ class VariableResourceTrainer(EarlyFixingTrainer):
         batch_lambdak_ineq = batch_lambdak[:,:C_ineq.shape[1]]
         batch_lambdak_eq = batch_lambdak[:,C_ineq.shape[1]:]
 
-        if (self._e + 1) % 21 == 0:
+        if (self._e + 1) % 51 == 0:
             # update Lag. multipliers estimate
             with torch.no_grad():
                 batch_lambdak_ineq = torch.max(batch_lambdak_ineq - C_ineq / self.muk,
@@ -732,7 +735,7 @@ class VariableResourceTrainer(EarlyFixingTrainer):
         if validation:
             curr_muk = self.muk
 
-            if (self._e + 1) % 21 == 0:
+            if (self._e + 1) % 51 == 0:
                 # update muk after every epoch
                 with torch.no_grad():
                     C = torch.hstack((C_ineq - s_ineq, C_eq))
@@ -740,11 +743,15 @@ class VariableResourceTrainer(EarlyFixingTrainer):
                     self.best_cons_for_update = C.norm(2).item()
                 else:
                     self.muk *= .9
+                # reset optimizer
+                self._load_optim()
 
             # here you can compute validation-specific metrics
             with torch.no_grad():
                 obj = x @ c
-            return loss_time, aug_lagragian, (obj, C_ineq, C_eq, curr_muk)
+                C = torch.hstack((C_ineq - s_ineq, C_eq))
+                C = C.norm(2).item()
+            return loss_time, aug_lagragian, (obj, C, C_ineq, C_eq, curr_muk)
         else:
             return loss_time, aug_lagragian
 
@@ -759,8 +766,9 @@ class VariableResourceTrainer(EarlyFixingTrainer):
         }
 
         if metrics is not None:
-            obj, C_ineq, C_eq, muk = metrics[0]
-            losses['obj'] = obj
+            obj, C, C_ineq, C_eq, muk = metrics[0]
+            losses['obj'] = obj.item()
+            losses['C'] = C
             losses['mu_k'] = muk
             losses['best_C'] = self.best_cons_for_update
             losses['valid_ineq_ratio'] = (C_ineq >= 0.).sum() / C_ineq.shape[-1]
