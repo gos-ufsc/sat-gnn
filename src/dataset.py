@@ -80,7 +80,7 @@ class SatsDataset(GraphDataset):
             # unsqueeze batch dimension, if necessary
             curr_feats.view(-1,curr_feats.shape[-1]),
             x.view(-1,x.shape[-1]),
-        )).T
+        ))
 
         return g, y
 
@@ -118,7 +118,7 @@ class VarClassDataset(GraphDataset):
             # unsqueeze batch dimension, if necessary
             curr_feats.view(-1,curr_feats.shape[-1]),
             x.view(-1,x.shape[-1]),
-        )).T
+        ))
 
         return g, y
 
