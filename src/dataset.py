@@ -75,18 +75,21 @@ class SatsDataset(GraphDataset):
         y = self._ys[i_][j_]
 
         g = deepcopy(self.gs[i_])
-        g.nodes['var'].data['x'] = torch.stack(
-            g.nodes['var'].data['x'],
-            x,
-        ).T
+        curr_feats = g.nodes['var'].data['x']
+        g.nodes['var'].data['x'] = torch.vstack((
+            # unsqueeze batch dimension, if necessary
+            curr_feats.view(-1,curr_feats.shape[-1]),
+            x.view(-1,x.shape[-1]),
+        )).T
 
         return g, y
 
 class VarClassDataset(GraphDataset):
     """Classification of variable within solution.
     
-    Provides the problem (A,b,c) and a random candidate solution. The label is 1
-    for each dimension that is equal to the optimal solution.
+    Provides the problem (A,b,c encoded as a graph) and a random candidate
+    solution. The label is 1 for each dimension that is equal to the optimal
+    solution.
     """
     def __init__(self, As, bs, cs, optimals, samples_per_problem=1e3, name='Optimality of Dimensions',
                  **kwargs):
@@ -110,10 +113,12 @@ class VarClassDataset(GraphDataset):
         y = (x == opt).type(x.type())
 
         g = super().__getitem__(i)
-        g.nodes['var'].data['x'] = torch.stack(
-            g.nodes['var'].data['x'],
-            x,
-        ).T
+        curr_feats = g.nodes['var'].data['x']
+        g.nodes['var'].data['x'] = torch.vstack((
+            # unsqueeze batch dimension, if necessary
+            curr_feats.view(-1,curr_feats.shape[-1]),
+            x.view(-1,x.shape[-1]),
+        )).T
 
         return g, y
 
