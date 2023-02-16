@@ -6,6 +6,8 @@ from dgl.nn import HeteroGraphConv, GraphConv
 
 
 class JobGCN(nn.Module):
+    """Expects all features to be on the `x` data.
+    """
     def __init__(self, n_var_feats, n_con_feats, n_h_feats=10, readout_op='mean'):
         super(JobGCN, self).__init__()
         self.n_var_feats = n_var_feats
@@ -43,11 +45,8 @@ class JobGCN(nn.Module):
         self.readout_op = readout_op
 
     def forward(self, g):
-        var_features = torch.stack((
-            g.nodes['var'].data['c'],
-            g.nodes['var'].data['x'],
-        )).T
-        con_features = g.nodes['con'].data['b'].view(-1,self.n_con_feats)
+        var_features = g.nodes['var'].data['x'].view(-1,self.n_var_feats)
+        con_features = g.nodes['con'].data['x'].view(-1,self.n_con_feats)
 
         edge_weights = g.edata['A']
 
@@ -90,13 +89,15 @@ class JobGCN(nn.Module):
             return torch.stack([g_.nodes['var'].data['logit'] for g_ in dgl.unbatch(g)]).squeeze(-1)
 
 class InstanceGCN(nn.Module):
-    def __init__(self, n_var_feats, n_con_feats, n_h_feats=10, readout_op='mean'):
+    """Expects all features to be on the `x` data.
+    """
+    def __init__(self, n_var_feats, n_con_feats=1, n_soc_feats=1, n_h_feats=10, readout_op='mean'):
         super().__init__()
         self.n_var_feats = n_var_feats
         self.n_con_feats = n_con_feats
 
         self.soc_emb = torch.nn.Sequential(
-            torch.nn.Linear(n_var_feats, n_h_feats),
+            torch.nn.Linear(n_soc_feats, n_h_feats),
             torch.nn.ReLU(),
         ).double()
         self.var_emb = torch.nn.Sequential(
@@ -135,13 +136,9 @@ class InstanceGCN(nn.Module):
         self.readout_op = readout_op
 
     def forward(self, g):
-        var_features = g.nodes['var'].data['c'].view(-1,self.n_var_feats)
-        soc_features = g.nodes['soc'].data['c'].view(-1,self.n_var_feats)
-        # var_features = torch.stack((
-        #     g.nodes['var'].data['c'],
-        #     g.nodes['var'].data['x'],
-        # )).T
-        con_features = g.nodes['con'].data['b'].view(-1,self.n_con_feats)
+        var_features = g.nodes['var'].data['x'].view(-1,self.n_var_feats)
+        soc_features = g.nodes['soc'].data['x'].view(-1,self.n_var_feats)
+        con_features = g.nodes['con'].data['x'].view(-1,self.n_con_feats)
 
         edge_weights = g.edata['A']
 

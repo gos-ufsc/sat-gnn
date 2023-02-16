@@ -40,8 +40,8 @@ class GraphDataset(DGLDataset):
         g.edges['v2c'].data['A'] = torch.from_numpy(edge_weights)
         g.edges['c2v'].data['A'] = torch.from_numpy(edge_weights)
 
-        g.nodes['var'].data['c'] = torch.from_numpy(c)
-        g.nodes['con'].data['b'] = torch.from_numpy(b)
+        g.nodes['var'].data['x'] = torch.from_numpy(c)
+        g.nodes['con'].data['x'] = torch.from_numpy(b)
 
         return g
 
@@ -75,7 +75,10 @@ class SatsDataset(GraphDataset):
         y = self._ys[i_][j_]
 
         g = deepcopy(self.gs[i_])
-        g.nodes['var'].data['x'] = x
+        g.nodes['var'].data['x'] = torch.stack(
+            g.nodes['var'].data['x'],
+            x,
+        ).T
 
         return g, y
 
@@ -107,7 +110,10 @@ class VarClassDataset(GraphDataset):
         y = (x == opt).type(x.type())
 
         g = super().__getitem__(i)
-        g.nodes['var'].data['x'] = x
+        g.nodes['var'].data['x'] = torch.stack(
+            g.nodes['var'].data['x'],
+            x,
+        ).T
 
         return g, y
 
@@ -183,10 +189,10 @@ class ResourceDataset(DGLDataset):
         g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_weights)
         g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_weights)
 
-        g.nodes['con'].data['b'] = torch.from_numpy(b)
+        g.nodes['con'].data['x'] = torch.from_numpy(b)
 
-        g.nodes['var'].data['c'] = torch.from_numpy(c[~soc_vars_mask])
-        g.nodes['soc'].data['c'] = torch.from_numpy(c[soc_vars_mask])
+        g.nodes['var'].data['x'] = torch.from_numpy(c[~soc_vars_mask])
+        g.nodes['soc'].data['x'] = torch.from_numpy(c[soc_vars_mask])
 
         return g
 
