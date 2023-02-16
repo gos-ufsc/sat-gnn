@@ -207,3 +207,42 @@ class ResourceDataset(DGLDataset):
     def __getitem__(self, idx):
         return self.gs[idx], self.rs[idx]
 
+class InstanceEarlyFixingDataset(DGLDataset):
+    def __init__(self, instances, optimals, samples_per_problem=1000, name='Optimality of Dimensions - Instance', **kwargs):
+        super().__init__(name, **kwargs)
+
+        assert len(optimals) == len(instances)
+
+        self._optimals = torch.from_numpy(np.array(optimals))
+
+        self.samples_per_problem = int(samples_per_problem)
+
+        self.models = list()
+        self.gs = list()
+        for instance in instances:
+            jobs = list(range(instance['jobs'][0]))
+            m = get_model(jobs, instance, coupling=True)
+
+            self.gs.append(ResourceDataset.make_graph(m))
+            self.models.append(m)
+
+    def __len__(self):
+        return len(self.gs) * self.samples_per_problem
+
+    def __getitem__(self, idx):
+        i = idx // self.samples_per_problem
+
+        opt = self._optimals[i]
+        g = deepcopy(self.gs[i])
+
+        x = torch.randint(0, 2, opt.shape)  # generate random candidate
+        y = (x == opt).type(x.type())
+
+        curr_feats = g.nodes['var'].data['x']
+        g.nodes['var'].data['x'] = torch.hstack((
+            # unsqueeze features dimension, if necessary
+            curr_feats.view(curr_feats.shape[0],-1),
+            x.view(x.shape[-1],-1),
+        ))
+
+        return g, y
