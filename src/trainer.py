@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from pathlib import Path
 from time import time
+from typing import List
 
 import dgl
 import gurobipy
@@ -15,7 +16,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from src.data import get_soc, get_model, load_data, load_instance
-from src.dataset import ResourceDataset, SatsDataset, VarClassDataset
+from src.dataset import InstanceEarlyFixingDataset, ResourceDataset, SatsDataset, VarClassDataset
 from src.utils import timeit
 
 
@@ -595,6 +596,68 @@ class EarlyFixingTrainer(Trainer):
             losses['accuracy_per_dimension'] = acc
 
         return losses
+
+class EarlyFixingInstanceTrainer(EarlyFixingTrainer):
+    def __init__(self, net: nn.Module, instances_fpaths: List[Path],
+                 optimals: Path, epochs=5, lr=0.001, batch_size: int = 2 ** 4,
+                 samples_per_problem: int = 1000, optimizer: str = 'Adam',
+                 optimizer_params: dict = None, n_instances_for_test=2,
+                 loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
+                 lr_scheduler_params: dict = None, mixed_precision=False,
+                 device=None, wandb_project=None, wandb_group=None, logger=None,
+                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        super(EarlyFixingTrainer, self).__init__(
+            net, epochs, lr, optimizer, optimizer_params, loss_func,
+            lr_scheduler, lr_scheduler_params, mixed_precision, device,
+            wandb_project, wandb_group, logger, checkpoint_every, random_seed,
+            max_loss,
+        )
+
+        assert len(optimals) == len(instances_fpaths)
+
+        self.instances_fpaths = [Path(i) for i in instances_fpaths]
+        self.batch_size = batch_size
+        self.samples_per_problem = samples_per_problem
+        self.optimals = optimals
+        self.n_instances_for_test = int(n_instances_for_test)
+
+        self._add_to_wandb_config({
+            "instances": [i.name for i in instances_fpaths],
+            "batch_size": self.batch_size,
+            "samples_per_problem": self.samples_per_problem,
+            "n_instances_for_test": self.n_instances_for_test,
+        })
+
+    def prepare_data(self):
+        data = InstanceEarlyFixingDataset(
+            [load_instance(i) for i in self.instances_fpaths],
+            [self.optimals[i.name]['sol'] for i in self.instances_fpaths],
+            samples_per_problem=self.samples_per_problem,
+        )
+
+        # leave last job for testing
+        train_sampler = SubsetRandomSampler(torch.arange(
+            self.samples_per_problem * (len(self.instances_fpaths)
+                                        - self.n_instances_for_test)
+        ))
+        test_sampler = SubsetRandomSampler(torch.arange(
+            self.samples_per_problem * (len(self.instances_fpaths)
+                                        - self.n_instances_for_test),
+            self.samples_per_problem * len(self.instances_fpaths)
+        ))
+
+        self.data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=train_sampler,
+            batch_size=self.batch_size,
+            drop_last=False,
+        )
+        self.val_data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=test_sampler,
+            batch_size=self.batch_size,
+            drop_last=False
+        )
 
 class VariableResourceTrainer(EarlyFixingTrainer):
     def __init__(self, net: nn.Module, instance_fpath="data/raw/97_9.jl",
