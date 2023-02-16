@@ -95,6 +95,7 @@ class InstanceGCN(nn.Module):
         super().__init__()
         self.n_var_feats = n_var_feats
         self.n_con_feats = n_con_feats
+        self.n_soc_feats = n_soc_feats
 
         self.soc_emb = torch.nn.Sequential(
             torch.nn.Linear(n_soc_feats, n_h_feats),
@@ -137,7 +138,7 @@ class InstanceGCN(nn.Module):
 
     def forward(self, g):
         var_features = g.nodes['var'].data['x'].view(-1,self.n_var_feats)
-        soc_features = g.nodes['soc'].data['x'].view(-1,self.n_var_feats)
+        soc_features = g.nodes['soc'].data['x'].view(-1,self.n_soc_feats)
         con_features = g.nodes['con'].data['x'].view(-1,self.n_con_feats)
 
         edge_weights = g.edata['A']
