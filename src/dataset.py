@@ -161,7 +161,9 @@ class ResourceDataset(DGLDataset):
 
         edge_weights = A_[A_ != 0]
 
-        soc_vars_mask = np.array(['soc' in v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()])
+        vars_names = [v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()]
+        # grab all non-decision variables (everything that is not `x` or `phi`)
+        soc_vars_mask = np.array([('x(' not in v) and ('phi(' not in v) for v in vars_names])
         soc_vars = np.arange(soc_vars_mask.shape[0])[soc_vars_mask]
         var_vars = np.arange(soc_vars_mask.shape[0])[~soc_vars_mask]
         soc_edges_mask = np.isin(edges.T[:,1], soc_vars)

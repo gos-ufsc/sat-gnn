@@ -4,6 +4,7 @@ import pickle
 import re
 import torch
 import gurobipy
+from gurobipy import GRB
 
 
 def load_instance(fpath="data/raw/97_9.jl"):
@@ -71,9 +72,9 @@ def get_model(jobs, instance, coupling=False, recurso=None):
         # associated with a given job to be together,
         # like x(0,0),...,x(0,-1),phi(0,0),...phi(0,-1),x(1,0),...,x(1,-1),phi(1,0),...
         for t in range(T):
-                x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1, vtype=gurobipy.GRB.BINARY)
+                x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1, vtype=GRB.BINARY)
         for t in range(T):
-                phi[j,t] = model.addVar(vtype=gurobipy.GRB.BINARY, name="phi(%s,%s)" % (j, t),)
+                phi[j,t] = model.addVar(vtype=GRB.BINARY, name="phi(%s,%s)" % (j, t),)
 
     soc_inicial = 0.7
     limite_inferior = 0.0
@@ -83,7 +84,7 @@ def get_model(jobs, instance, coupling=False, recurso=None):
     bat_usage = 5
 
     # set objective
-    model.setObjective(sum(priority[j] * x[j,t] for j in J_SUBSET for t in range(T)), gurobipy.GRB.MAXIMIZE)
+    model.setObjective(sum(priority[j] * x[j,t] for j in J_SUBSET for t in range(T)), GRB.MAXIMIZE)
 
     # phi defines startups of jobs
     for t in range(T):
@@ -134,16 +135,40 @@ def get_model(jobs, instance, coupling=False, recurso=None):
                 model.addConstr(sum(x[j,t_] for t_ in range(t, T)) >= (T - t) * phi[j,t])
 
     if coupling:
+        soc = {}
+        i = {}
+        b = {}
         for t in range(T):
-            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) <= recurso_p[t] + bat_usage * v_bat)
+            soc[t] = model.addVar(vtype=GRB.CONTINUOUS, name="soc(%s)" % t)
+            i[t] = model.addVar(lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS, name="i(%s)" % t)
+            b[t] = model.addVar(lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS, name="b(%s)" % t)
 
-        soc = list()
-        soc.append(soc_inicial)
-        for t in range(1,T):
-            soc.append(model.addVar(name="soc(%s)" % (t,), lb=limite_inferior, ub=1))
+        ################################
+        # Add power constraints
+        for t in range(T):
+            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) <= recurso_p[t] + bat_usage * v_bat)# * (1 - alpha[t]))
 
-            bat_t = recurso_p[t] - sum(uso_p[j] * x[j,t] for j in J_SUBSET)
-            model.addConstr(soc[t] == soc[t-1] + (bat_t / v_bat) * (ef / (60 * q)))
+        ################################
+        # Bateria
+        ################################
+        for t in range(T):
+            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) + b[t] == recurso_p[t])
+
+        # Define the i_t, SoC_t constraints in Gurobi
+        for t in range(T):
+            # P = V * I 
+            model.addConstr(b[t] / v_bat >= i[t])
+
+            if t == 0:
+                # SoC(1) = SoC(0) + p_carga[1]/60
+                model.addConstr(soc[t] == soc_inicial + (ef / q) * (i[t] / 60))
+            else:
+                # SoC(t) = SoC(t-1) + (ef / Q) * I(t)
+                model.addConstr(soc[t] == soc[t - 1] + (ef / q) * (i[t] / 60))
+
+            # Set the lower and upper limits on SoC
+            model.addConstr(limite_inferior <= soc[t])
+            model.addConstr(soc[t] <= 1)
 
     model.update()
 
@@ -227,7 +252,7 @@ def get_coupling_constraints(X, instance, r=None):
 
     return g
 
-def get_soc(X, instance, r):
+def get_soc(X, instance, r=None):
     J = instance['jobs'][0]
     T = instance['tamanho'][0]
     uso_p = torch.Tensor(instance['uso_p']).to(X) # recurso utilizado por cada tarefa
