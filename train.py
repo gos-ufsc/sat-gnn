@@ -1,9 +1,11 @@
+from pathlib import Path
+import pickle
 import numpy as np
 import torch
 import torch.nn
 
-from src.net import GCN
-from src.trainer import FactibilityClassificationTrainer, EarlyFixingTrainer, VariableResourceTrainer
+from src.net import InstanceGCN, JobGCN
+from src.trainer import EarlyFixingInstanceTrainer, FactibilityClassificationTrainer, EarlyFixingTrainer, VariableResourceTrainer
 from src.utils import debugger_is_active
 
 
@@ -48,14 +50,34 @@ if __name__ == '__main__':
     #     device=device,
     # ).run()
 
-    # Generation of feasible solutions from different resource vectors
-    VariableResourceTrainer(
-        GCN(2, 1, readout_op=None),
+    # # Generation of feasible solutions from different resource vectors
+    # VariableResourceTrainer(
+    #     InstanceGCN(1, 1, readout_op=None),
+    #     batch_size=2**4,
+    #     epochs=100000,
+    #     # optimizer='SGD',
+    #     # optimizer_params={'momentum': 0.99},
+    #     # lr=.1,
+    #     samples_per_problem=100,
+    #     wandb_project=wandb_project,
+    #     wandb_group='VariableResourceGenerator-test-no_integrality',
+    #     random_seed=seed,
+    #     device=device,
+    # ).run()
+
+    # Early fixing the solution to all jobs, including coupling constraints
+    instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
+    with open('97_9_opts.pkl', 'rb') as f:
+        opts = pickle.load(f)
+    EarlyFixingInstanceTrainer(
+        InstanceGCN(2, readout_op=None),
+        instances_fpaths=instances_fpaths,
+        n_instances_for_test=1,
+        optimals=opts,
         batch_size=2**4,
-        epochs=5000,
-        samples_per_problem=1000,
+        epochs=100,
         wandb_project=wandb_project,
-        wandb_group='VariableResourceGenerator-test-0obj-no_integrality',
+        wandb_group='EarlyFixingInstance-test',
         random_seed=seed,
         device=device,
     ).run()
