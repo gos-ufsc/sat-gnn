@@ -23,14 +23,19 @@ if __name__ == '__main__':
 
         model.optimize()
 
+        if model.status != 2:
+            print('WARNING ', instance_name, ' WAS NOT SOLVED')
+            print('SOLVER STATUS ', model.status)
+            continue
+
         X = np.array([v.X for v in model.getVars()])
-        soc_vars_mask = np.array(['soc' in v.getAttr(GRB.Attr.VarName) for v in model.getVars()])
-        X = X[~soc_vars_mask]
+        model_vars = np.core.defchararray.array([v.getAttr(GRB.Attr.VarName) for v in model.getVars()])
+        X = X[(model_vars.find('x') >= 0) | (model_vars.find('phi') >= 0)]
 
         solutions[instance_name] = {
             'obj': model.ObjVal,
             'sol': X,
         }
     
-    with open('97_9_opts.pkl', 'wb') as f:
+    with open('new_97_9_opts.pkl', 'wb') as f:
         pickle.dump(solutions, f)
