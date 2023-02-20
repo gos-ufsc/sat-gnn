@@ -15,7 +15,7 @@ import wandb
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.sampler import SubsetRandomSampler
 
-from src.data import get_soc, get_model, load_data, load_instance
+from src.problem import get_soc, get_model, load_data, load_instance
 from src.dataset import InstanceEarlyFixingDataset, ResourceDataset, SatsDataset, VarClassDataset
 from src.utils import timeit
 

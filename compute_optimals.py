@@ -6,7 +6,7 @@ from gurobipy import GRB
 import pickle
 import numpy as np
 
-from src.data import get_model, load_instance
+from src.problem import get_model, load_instance
 
 
 if __name__ == '__main__':

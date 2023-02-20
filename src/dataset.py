@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from dgl.data import DGLDataset
 
-from src.data import get_model
+from src.problem import get_model
 
 
 class GraphDataset(DGLDataset):
