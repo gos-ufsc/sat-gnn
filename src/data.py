@@ -55,9 +55,9 @@ def get_model(jobs, instance, coupling=False, recurso=None):
     # create a model
     model = gurobipy.Model()
     model.Params.LogToConsole = 0
-    model.setParam('PoolSearchMode', 1)
-    model.setParam('PoolSolutions', 100000)
-    model.setParam('TimeLimit', 120)
+    # model.setParam('PoolSearchMode', 1)
+    # model.setParam('PoolSolutions', 100000)
+    model.setParam('TimeLimit', 2*960)
     # create decision variables
 
     if isinstance(jobs, list):
