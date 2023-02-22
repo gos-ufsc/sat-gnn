@@ -402,7 +402,7 @@ def get_benders_cut(instance, solucao, verbose=False):
             #    #print(pato)
 
         # assuming the cut is of the form w^T x >= b
-        cut_w = np.zeros_like(solucao)
+        cut_w = np.zeros_like(solucao, dtype=float)
         for (i, j), w_ij in indices.items():
             cut_w[i,j] = w_ij
         cut_b = float(cut.split(' ')[0])
