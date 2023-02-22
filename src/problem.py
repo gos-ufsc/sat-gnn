@@ -421,3 +421,16 @@ def get_feasible(model, incumbent):
             feas_incumbent[j,t] = var.X
 
     return feas_incumbent
+
+def get_vars_from_x(x, model):
+    model_ = model.copy()
+
+    for j in range(x.shape[0]):
+        for t in range(x.shape[1]):
+            model_.getVarByName(f"x({j},{t})").lb = x[j,t]
+            model_.getVarByName(f"x({j},{t})").ub = x[j,t]
+
+    model_.update()
+    model_.optimize()
+
+    return model_.getVars()
