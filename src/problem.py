@@ -419,8 +419,11 @@ def get_benders_cut(instance, solucao, verbose=False):
     else:
         print('ERROR: status ', subproblem.status)
 
-def get_feasible(model, incumbent):
+def get_feasible(model, incumbent, instance):
     model_ = model.copy()
+
+    J = instance['jobs'][0]
+    T = instance['tamanho'][0]
 
     expr = 0
     for j in range(J):
