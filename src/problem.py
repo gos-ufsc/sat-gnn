@@ -28,7 +28,7 @@ def load_instance(fpath="data/raw/97_9.jl"):
 
     return instancia
 
-def get_model(jobs, instance, coupling=False, recurso=None):
+def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False):
     if isinstance(instance, str) or isinstance(instance, Path):
         instance = load_instance(instance)
 
@@ -169,6 +169,39 @@ def get_model(jobs, instance, coupling=False, recurso=None):
             # Set the lower and upper limits on SoC
             model.addConstr(limite_inferior <= soc[t])
             model.addConstr(soc[t] <= 1)
+
+    if new_ineq:
+        # first
+        for j in J_SUBSET:
+            for t in range(T):
+                model.addConstr(gurobipy.quicksum(phi[j, t_]
+                                    for t_ in range(t, min(T, t + min_cpu_time[j] + 1))) <= 1,
+                                                    name = f"VI_min_CPU_TIME_phi({j},{t})")
+
+        # third
+        for j in J_SUBSET:
+            model.addConstr(gurobipy.quicksum(x[j, t] for t in range(T)) <=
+                                    max_cpu_time[j]*gurobipy.quicksum(phi[j, t]
+                                        for t in range(T)), name = f"VI_max_cpu_time_2({j})")
+        # fourth
+        for j in J_SUBSET:
+            for t in range(0, T - max_cpu_time[j], 1):
+                model.addConstr(
+                    gurobipy.quicksum(x[j, t_] for t_ in range(t, t + max_cpu_time[j], 1)) <=
+                        max_cpu_time[j]*gurobipy.quicksum(phi[j, t_] for t_ in range(max(t - max_cpu_time[j] + 1,0), t + max_cpu_time[j], 1)),
+                    name = f"VI_max_cpu_time_3({j},{t})"
+                )
+
+        # fifth
+        for j in J_SUBSET:
+            for t in range(0, T - min_periodo_job[j] + 1):
+                model.addConstr(gurobipy.quicksum(x[j, t_] for t_ in range(t, t + min_periodo_job[j])) <= min_periodo_job[j],
+                                name = f"VI_min_period_btw_jobs_2({j},{t})")
+
+        # sixth
+        if max_cpu_time[j] < (max_periodo_job[j] - min_cpu_time[j]):
+            for t in range(0, T - max_cpu_time[j]):
+                model.addConstr(phi[j,t] + x[j, t + max_cpu_time[j]] <= 1)
 
     model.update()
 

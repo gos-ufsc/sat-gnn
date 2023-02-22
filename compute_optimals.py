@@ -14,10 +14,15 @@ if __name__ == '__main__':
 
     dst_fpath = 'new_97_9_opts.pkl'
 
-    with open(dst_fpath, 'rb') as f:
-        solutions = pickle.load(f)
+    try:
+        with open(dst_fpath, 'rb') as f:
+            solutions = pickle.load(f)
 
-    instances_fps = [f for f in instances_fps if f not in solutions.keys()]
+        instances_fps = [f for f in instances_fps if f not in solutions.keys()]
+    except FileNotFoundError:
+        solutions = dict()
+        pass
+
     for fpath in tqdm(instances_fps):
         instance_name = fpath.name
         print(instance_name)
@@ -25,17 +30,14 @@ if __name__ == '__main__':
         instance = load_instance(str(fpath))
 
         jobs = list(range(instance['jobs'][0]))
-        model = get_model(jobs, fpath, coupling=True)
+        model = get_model(jobs, fpath, coupling=True, new_ineq=True)
 
-        model.Params.LogToConsole = 1
+        # model.Params.LogToConsole = 1
         model.update()
 
         model.optimize()
 
-        # if model.status != 2:
-        #     print('WARNING ', instance_name, ' WAS NOT SOLVED')
-        #     print('SOLVER STATUS ', model.status)
-        #     continue
+        print(model.MIPGap)
 
         X = np.array([v.X for v in model.getVars()])
         model_vars = np.core.defchararray.array([v.getAttr(GRB.Attr.VarName) for v in model.getVars()])
