@@ -419,20 +419,39 @@ def get_benders_cut(instance, solucao, verbose=False):
     else:
         print('ERROR: status ', subproblem.status)
 
-def get_feasible(model, incumbent, instance):
+def get_feasible(model, incumbent, instance, with_phi=True, weighted=False):
     model_ = model.copy()
 
     J = instance['jobs'][0]
     T = instance['tamanho'][0]
 
+    if with_phi:
+        T_ = T * 2
+    else:
+        T_ = T
+
     expr = 0
     for j in range(J):
-        for t in range(T):
+        for t_ in range(T_):
+            if t_ >= T:
+                t = t_ - T
+                var = 'phi'
+            else:
+                t = t_
+                var = 'x'
             #if model.getVarByName("x(%s,%s,%s)" % (s,j,t)).x > 0.5:
             if incumbent[j][t] > 0.5:
-                expr += (1 - model_.getVarByName("x(%s,%s)" % (j,t)))
+                if weighted:
+                    weight = 2 * (incumbent[j][t] - 0.5)
+                else:
+                    weight = 1
+                expr += (1 - model_.getVarByName("%s(%s,%s)" % (var,j,t))) * weight
             else:
-                expr += model_.getVarByName("x(%s,%s)" % (j,t))
+                if weighted:
+                    weight = 2 * (0.5 - incumbent[j][t])
+                else:
+                    weight = 1
+                expr += model_.getVarByName("%s(%s,%s)" % (var,j,t))
             #if incumbent_phi[j][t] > 0.5:
             #    expr += (1 - model.getVarByName("phi(%s,%s)" % (j,t)))
             #else:
@@ -456,7 +475,7 @@ def get_feasible(model, incumbent, instance):
             t = int(t)
             feas_incumbent[j,t] = var.X
 
-    return feas_incumbent
+        return feas_incumbent
 
 def get_vars_from_x(x, model):
     model_ = model.copy()
