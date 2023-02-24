@@ -5,7 +5,7 @@ import torch
 import torch.nn
 
 from src.net import InstanceGCN, JobGCN
-from src.trainer import EarlyFixingInstanceTrainer, FactibilityClassificationTrainer, EarlyFixingTrainer, VariableResourceTrainer
+from src.trainer import EarlyFixingInstanceTrainer, FactibilityClassificationTrainer, EarlyFixingTrainer, OnlyXEarlyFixingInstanceTrainer, VariableResourceTrainer
 from src.utils import debugger_is_active
 
 
@@ -67,17 +67,34 @@ if __name__ == '__main__':
 
     # Early fixing the solution to all jobs, including coupling constraints
     instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
+    instances_fpaths = sorted(instances_fpaths)
     with open('97_9_opts.pkl', 'rb') as f:
         opts = pickle.load(f)
     EarlyFixingInstanceTrainer(
         InstanceGCN(2, readout_op=None),
         instances_fpaths=instances_fpaths,
-        n_instances_for_test=1,
         optimals=opts,
         batch_size=2**4,
         epochs=100,
         wandb_project=wandb_project,
-        wandb_group='EarlyFixingInstance-test',
+        wandb_group='EarlyFixingInstance-test-edge-types',
         random_seed=seed,
         device=device,
     ).run()
+
+    # # Early fixing the solution to all jobs, including coupling constraints
+    # instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
+    # # instances_fpaths = sorted(instances_fpaths)
+    # with open('97_9_opts.pkl', 'rb') as f:
+    #     opts = pickle.load(f)
+    # OnlyXEarlyFixingInstanceTrainer(
+    #     InstanceGCN(2, readout_op=None),
+    #     instances_fpaths=instances_fpaths,
+    #     optimals=opts,
+    #     batch_size=2**4,
+    #     epochs=100,
+    #     wandb_project=wandb_project,
+    #     wandb_group='OnlyX-EarlyFixingInstance-test',
+    #     random_seed=seed,
+    #     device=device,
+    # ).run()

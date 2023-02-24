@@ -16,7 +16,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from src.problem import get_soc, get_model, load_data, load_instance
-from src.dataset import InstanceEarlyFixingDataset, ResourceDataset, SatsDataset, VarClassDataset
+from src.dataset import InstanceEarlyFixingDataset, OnlyXInstanceEarlyFixingDataset, ResourceDataset, SatsDataset, VarClassDataset
 from src.utils import timeit
 
 
@@ -632,6 +632,38 @@ class EarlyFixingInstanceTrainer(EarlyFixingTrainer):
         data = InstanceEarlyFixingDataset(
             [load_instance(i) for i in self.instances_fpaths],
             [self.optimals[i.name]['sol'] for i in self.instances_fpaths],
+            samples_per_problem=self.samples_per_problem,
+        )
+
+        # leave last job for testing
+        train_sampler = SubsetRandomSampler(torch.arange(
+            self.samples_per_problem * (len(self.instances_fpaths)
+                                        - self.n_instances_for_test)
+        ))
+        test_sampler = SubsetRandomSampler(torch.arange(
+            self.samples_per_problem * (len(self.instances_fpaths)
+                                        - self.n_instances_for_test),
+            self.samples_per_problem * len(self.instances_fpaths)
+        ))
+
+        self.data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=train_sampler,
+            batch_size=self.batch_size,
+            drop_last=False,
+        )
+        self.val_data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=test_sampler,
+            batch_size=self.batch_size,
+            drop_last=False
+        )
+
+class OnlyXEarlyFixingInstanceTrainer(EarlyFixingInstanceTrainer):
+    def prepare_data(self):
+        data = OnlyXInstanceEarlyFixingDataset(
+            [load_instance(i) for i in self.instances_fpaths],
+            [self.optimals[i.name]['sol'].reshape((9,97*2))[:,:97].flatten() for i in self.instances_fpaths],
             samples_per_problem=self.samples_per_problem,
         )
 
