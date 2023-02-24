@@ -91,7 +91,7 @@ class JobGCN(nn.Module):
 class InstanceGCN(nn.Module):
     """Expects all features to be on the `x` data.
     """
-    def __init__(self, n_var_feats, n_con_feats=1, n_soc_feats=1, n_h_feats=10, readout_op='mean'):
+    def __init__(self, n_var_feats, n_con_feats=2, n_soc_feats=1, n_h_feats=10, readout_op='mean'):
         super().__init__()
         self.n_var_feats = n_var_feats
         self.n_con_feats = n_con_feats

@@ -162,11 +162,7 @@ class ResourceDataset(DGLDataset):
         edge_weights = A_[A_ != 0]
 
         constraints_sense = np.array([ci.sense for ci in model.getConstrs()])
-        edge_types = np.array(list(map({'>': 1, '=': 0, '<': -1}.__getitem__, constraints_sense)))
-        edge_types = np.tile(edge_types, (A.shape[1],1)).T.flatten()
-        edge_types = edge_types[A_ != 0]
-
-        edge_features = np.stack((edge_weights, edge_types), -1)
+        constraints_sense = np.array(list(map({'>': 1, '=': 0, '<': -1}.__getitem__, constraints_sense)))
 
         vars_names = [v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()]
         # grab all non-decision variables (everything that is not `x` or `phi`)
@@ -195,15 +191,17 @@ class ResourceDataset(DGLDataset):
             ('con', 'c2s', 'soc'): (soc_edges[0], soc_edges[1]),
         })
 
-        soc_edge_features = edge_features[soc_edges_mask]
-        g.edges['s2c'].data['A'] = torch.from_numpy(soc_edge_features)
-        g.edges['c2s'].data['A'] = torch.from_numpy(soc_edge_features)
+        soc_edge_weights = edge_weights[soc_edges_mask]
+        g.edges['s2c'].data['A'] = torch.from_numpy(soc_edge_weights)
+        g.edges['c2s'].data['A'] = torch.from_numpy(soc_edge_weights)
 
-        var_edge_features = edge_features[~soc_edges_mask]
-        g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_features)
-        g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_features)
+        var_edge_weights = edge_weights[~soc_edges_mask]
+        g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_weights)
+        g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_weights)
 
-        g.nodes['con'].data['x'] = torch.from_numpy(b)
+        g.nodes['con'].data['x'] = torch.from_numpy(np.stack(
+            (b, constraints_sense), -1
+        ))
 
         g.nodes['var'].data['x'] = torch.from_numpy(c[~soc_vars_mask])
         g.nodes['soc'].data['x'] = torch.from_numpy(c[soc_vars_mask])
