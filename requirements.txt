@@ -1,9 +1,8 @@
-dgl==1.0.1
+dgl==1.0.1+cu117
 dglgo==0.0.2
-torchvision
-pytorch-cuda=11.7
+torch==1.13.1
+torchvision==0.14.1
 gurobipy
-pytorch
 ipykernel
 matplotlib
 widgetsnbextension
