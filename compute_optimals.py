@@ -10,9 +10,11 @@ from src.problem import get_model, load_instance
 
 
 if __name__ == '__main__':
-    instances_fps = list(Path('data/raw').glob('97_9*.jl'))
+    instance_basename = '120_9'
 
-    dst_fpath = 'new_97_9_opts.pkl'
+    instances_fps = list(Path('data/raw').glob(instance_basename+'*.jl'))
+
+    dst_fpath = f'new_{instance_basename}_opts.pkl'
 
     try:
         with open(dst_fpath, 'rb') as f:
@@ -47,6 +49,6 @@ if __name__ == '__main__':
             'obj': model.ObjVal,
             'sol': X,
         }
-    
+
     with open(dst_fpath, 'wb') as f:
         pickle.dump(solutions, f)
