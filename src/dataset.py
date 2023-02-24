@@ -161,9 +161,130 @@ class ResourceDataset(DGLDataset):
 
         edge_weights = A_[A_ != 0]
 
+        constraints_sense = np.array([ci.sense for ci in model.getConstrs()])
+        edge_types = np.array(list(map({'>': 1, '=': 0, '<': -1}.__getitem__, constraints_sense)))
+        edge_types = np.tile(edge_types, (A.shape[1],1)).T.flatten()
+        edge_types = edge_types[A_ != 0]
+
+        edge_features = np.stack((edge_weights, edge_types), -1)
+
         vars_names = [v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()]
         # grab all non-decision variables (everything that is not `x` or `phi`)
         soc_vars_mask = np.array([('x(' not in v) and ('phi(' not in v) for v in vars_names])
+        soc_vars = np.arange(soc_vars_mask.shape[0])[soc_vars_mask]
+        var_vars = np.arange(soc_vars_mask.shape[0])[~soc_vars_mask]
+        soc_edges_mask = np.isin(edges.T[:,1], soc_vars)
+
+        var_edges = edges[:,~soc_edges_mask]
+        soc_edges = edges[:,soc_edges_mask]
+
+        # translate soc/var nodes index to 0-based
+        soc_edges[1] = np.array(list(map(
+            dict(zip(soc_vars, np.arange(soc_vars.shape[0]))).get,
+            soc_edges[1]
+        )))
+        var_edges[1] = np.array(list(map(
+            dict(zip(var_vars, np.arange(var_vars.shape[0]))).get,
+            var_edges[1]
+        )))
+
+        g = dgl.heterograph({
+            ('var', 'v2c', 'con'): (var_edges[1], var_edges[0]),
+            ('con', 'c2v', 'var'): (var_edges[0], var_edges[1]),
+            ('soc', 's2c', 'con'): (soc_edges[1], soc_edges[0]),
+            ('con', 'c2s', 'soc'): (soc_edges[0], soc_edges[1]),
+        })
+
+        soc_edge_features = edge_features[soc_edges_mask]
+        g.edges['s2c'].data['A'] = torch.from_numpy(soc_edge_features)
+        g.edges['c2s'].data['A'] = torch.from_numpy(soc_edge_features)
+
+        var_edge_features = edge_features[~soc_edges_mask]
+        g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_features)
+        g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_features)
+
+        g.nodes['con'].data['x'] = torch.from_numpy(b)
+
+        g.nodes['var'].data['x'] = torch.from_numpy(c[~soc_vars_mask])
+        g.nodes['soc'].data['x'] = torch.from_numpy(c[soc_vars_mask])
+
+        return g
+
+    def __len__(self):
+        return len(self.gs)
+
+    def __getitem__(self, idx):
+        return self.gs[idx], self.rs[idx]
+
+class InstanceEarlyFixingDataset(DGLDataset):
+    def __init__(self, instances, optimals, samples_per_problem=1000, name='Optimality of Dimensions - Instance', **kwargs):
+        super().__init__(name, **kwargs)
+
+        assert len(optimals) == len(instances)
+
+        self._optimals = torch.from_numpy(np.array(optimals))
+
+        self.samples_per_problem = int(samples_per_problem)
+
+        self.models = list()
+        self.gs = list()
+        for instance in instances:
+            jobs = list(range(instance['jobs'][0]))
+            m = get_model(jobs, instance, coupling=True)
+
+            self.gs.append(self.make_graph(m))
+            self.models.append(m)
+
+    @staticmethod
+    def make_graph(model):
+        return ResourceDataset.make_graph(model)
+
+    def __len__(self):
+        return len(self.gs) * self.samples_per_problem
+
+    def __getitem__(self, idx):
+        i = idx // self.samples_per_problem
+
+        opt = self._optimals[i]
+        g = deepcopy(self.gs[i])
+
+        x = torch.randint(0, 2, opt.shape)  # generate random candidate
+        y = (x == opt).type(x.type())
+
+        curr_feats = g.nodes['var'].data['x']
+        g.nodes['var'].data['x'] = torch.hstack((
+            # unsqueeze features dimension, if necessary
+            curr_feats.view(curr_feats.shape[0],-1),
+            x.view(x.shape[-1],-1),
+        ))
+
+        return g, y
+
+class OnlyXInstanceEarlyFixingDataset(InstanceEarlyFixingDataset):
+    def __init__(self, instances, optimals, samples_per_problem=1000,
+                 name='Optimality of Dimensions - Instance (only X)', **kwargs):
+        super().__init__(instances, optimals, samples_per_problem, name,
+                         **kwargs)
+
+    @staticmethod
+    def make_graph(model):
+        A = model.getA().toarray()
+        b = np.array(model.getAttr('rhs'))
+        c = np.array(model.getAttr('obj'))
+
+        # get only real (non-null) edges
+        A_ = A.flatten()
+        edges = np.indices(A.shape)  # cons -> vars
+        edges = edges.reshape(edges.shape[0],-1)
+        edges = edges[:,A_ != 0]
+        # edges = torch.from_numpy(edges)
+
+        edge_weights = A_[A_ != 0]
+
+        vars_names = [v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()]
+
+        # grab all non-`x` variables
+        soc_vars_mask = np.array([('x(' not in v) for v in vars_names])
         soc_vars = np.arange(soc_vars_mask.shape[0])[soc_vars_mask]
         var_vars = np.arange(soc_vars_mask.shape[0])[~soc_vars_mask]
         soc_edges_mask = np.isin(edges.T[:,1], soc_vars)
@@ -202,49 +323,3 @@ class ResourceDataset(DGLDataset):
         g.nodes['soc'].data['x'] = torch.from_numpy(c[soc_vars_mask])
 
         return g
-
-    def __len__(self):
-        return len(self.gs)
-
-    def __getitem__(self, idx):
-        return self.gs[idx], self.rs[idx]
-
-class InstanceEarlyFixingDataset(DGLDataset):
-    def __init__(self, instances, optimals, samples_per_problem=1000, name='Optimality of Dimensions - Instance', **kwargs):
-        super().__init__(name, **kwargs)
-
-        assert len(optimals) == len(instances)
-
-        self._optimals = torch.from_numpy(np.array(optimals))
-
-        self.samples_per_problem = int(samples_per_problem)
-
-        self.models = list()
-        self.gs = list()
-        for instance in instances:
-            jobs = list(range(instance['jobs'][0]))
-            m = get_model(jobs, instance, coupling=True)
-
-            self.gs.append(ResourceDataset.make_graph(m))
-            self.models.append(m)
-
-    def __len__(self):
-        return len(self.gs) * self.samples_per_problem
-
-    def __getitem__(self, idx):
-        i = idx // self.samples_per_problem
-
-        opt = self._optimals[i]
-        g = deepcopy(self.gs[i])
-
-        x = torch.randint(0, 2, opt.shape)  # generate random candidate
-        y = (x == opt).type(x.type())
-
-        curr_feats = g.nodes['var'].data['x']
-        g.nodes['var'].data['x'] = torch.hstack((
-            # unsqueeze features dimension, if necessary
-            curr_feats.view(curr_feats.shape[0],-1),
-            x.view(x.shape[-1],-1),
-        ))
-
-        return g, y
