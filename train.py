@@ -67,7 +67,6 @@ if __name__ == '__main__':
 
     # Early fixing the solution to all jobs, including coupling constraints
     instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
-    instances_fpaths = sorted(instances_fpaths)
     with open('97_9_opts.pkl', 'rb') as f:
         opts = pickle.load(f)
     EarlyFixingInstanceTrainer(
@@ -77,7 +76,7 @@ if __name__ == '__main__':
         batch_size=2**4,
         epochs=100,
         wandb_project=wandb_project,
-        wandb_group='EarlyFixingInstance-test-edge-types',
+        wandb_group='EarlyFixingInstance-test-con-type-as-feature',
         random_seed=seed,
         device=device,
     ).run()
