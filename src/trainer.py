@@ -44,8 +44,10 @@ class Trainer(ABC):
                  lr_scheduler_params: dict = None, mixed_precision=True,
                  device=None, wandb_project=None, wandb_group=None,
                  logger=None, checkpoint_every=50, random_seed=42,
-                 max_loss=None) -> None:
+                 max_loss=None, timeout=np.inf) -> None:
         self._is_initalized = False
+
+        self.timeout = timeout
 
         if device is None:
             self.device = torch.device(
@@ -288,6 +290,7 @@ class Trainer(ABC):
         if not self._is_initalized:
             self.setup_training()
 
+        start = time()
         while self._e < self.epochs:
             self.l.info(f"Epoch {self._e} started ({self._e+1}/{self.epochs})")
             epoch_start_time = time()
@@ -317,6 +320,9 @@ class Trainer(ABC):
             if self.max_loss is not None:
                 if val_score > self.max_loss:
                     break
+
+            if time() - start > self.timeout:
+                break
 
             self._e += 1
 
@@ -528,11 +534,11 @@ class EarlyFixingTrainer(Trainer):
                  loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
                  lr_scheduler_params: dict = None, mixed_precision=False,
                  device=None, wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+                 checkpoint_every=50, random_seed=42, max_loss=None, timeout=np.inf) -> None:
         super().__init__(net, epochs, lr, optimizer, optimizer_params,
                          loss_func, lr_scheduler, lr_scheduler_params,
                          mixed_precision, device, wandb_project, wandb_group,
-                         logger, checkpoint_every, random_seed, max_loss)
+                         logger, checkpoint_every, random_seed, max_loss, timeout)
 
         self.instance_fpath = Path(instance_fpath)
         self.batch_size = batch_size
@@ -605,12 +611,12 @@ class EarlyFixingInstanceTrainer(EarlyFixingTrainer):
                  loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
                  lr_scheduler_params: dict = None, mixed_precision=False,
                  device=None, wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+                 checkpoint_every=50, random_seed=42, max_loss=None, timeout=np.inf) -> None:
         super(EarlyFixingTrainer, self).__init__(
             net, epochs, lr, optimizer, optimizer_params, loss_func,
             lr_scheduler, lr_scheduler_params, mixed_precision, device,
             wandb_project, wandb_group, logger, checkpoint_every, random_seed,
-            max_loss,
+            max_loss, timeout,
         )
 
         assert len(optimals) == len(instances_fpaths)
@@ -626,6 +632,10 @@ class EarlyFixingInstanceTrainer(EarlyFixingTrainer):
             "batch_size": self.batch_size,
             "samples_per_problem": self.samples_per_problem,
             "n_instances_for_test": self.n_instances_for_test,
+            "n_passes": self.net.n_passes,
+            "n_h_feats": self.net.n_h_feats,
+            "single_conv": self.net.single_conv_for_both_passes,
+            "n_convs": len(self.net.convs),
         })
 
     def prepare_data(self):
