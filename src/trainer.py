@@ -290,12 +290,16 @@ class Trainer(ABC):
         if not self._is_initalized:
             self.setup_training()
 
+        self.val_scores = list()
+
         start = time()
         while self._e < self.epochs:
             self.l.info(f"Epoch {self._e} started ({self._e+1}/{self.epochs})")
             epoch_start_time = time()
 
             data_to_log, val_score = self._run_epoch()
+
+            self.val_scores.append(val_score)
 
             if self._log_to_wandb:
                 wandb.log(data_to_log, step=self._e, commit=True)
@@ -619,7 +623,7 @@ class EarlyFixingInstanceTrainer(EarlyFixingTrainer):
             max_loss, timeout,
         )
 
-        assert len(optimals) == len(instances_fpaths)
+        assert len(optimals) >= len(instances_fpaths)
 
         self.instances_fpaths = [Path(i) for i in instances_fpaths]
         self.batch_size = batch_size
