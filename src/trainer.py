@@ -94,6 +94,8 @@ class Trainer(ABC):
 
         self.max_loss = max_loss
 
+        self._val_score_label = 'all'
+
     @classmethod
     def load_trainer(cls, net: nn.Module, run_id: str, wandb_project=None,
                      logger=None):
@@ -282,7 +284,7 @@ class Trainer(ABC):
         self._add_data_to_log(train_times, 'train_time_', data_to_log)
         self._add_data_to_log(val_times, 'val_time_', data_to_log)
 
-        val_score = val_losses['all']  # defines best model
+        val_score = val_losses[self._val_score_label]  # defines best model
 
         return data_to_log, val_score
 
@@ -641,6 +643,8 @@ class EarlyFixingInstanceTrainer(EarlyFixingTrainer):
             "single_conv": self.net.single_conv_for_both_passes,
             "n_convs": len(self.net.convs),
         })
+
+        self._val_score_label = 'accuracy'
 
     def prepare_data(self):
         data = InstanceEarlyFixingDataset(
