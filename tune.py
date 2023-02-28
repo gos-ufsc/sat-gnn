@@ -24,15 +24,15 @@ if __name__ == '__main__':
     wandb_group = 'EarlyFixingInstance-tuning'
 
     # instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
-    instances_fpaths = [fp for fp in Path('data/raw/').glob('97_9*.jl') if (fp.name != '97_9_2.jl') and (fp != '97_9_10.jl')]
+    instances_fpaths = [fp for fp in Path('data/raw/').glob('97_9*.jl') if (fp.name != '97_9_2.jl') and (fp.name != '97_9_10.jl')]
     with open('97_9_opts.pkl', 'rb') as f:
         opts = pickle.load(f)
 
-    study_fpath = Path('study.pkl')
+    study_fpath = Path('study2.pkl')
 
     for _ in range(100):
         if study_fpath.exists():
-            with open('study.pkl', 'rb') as f:
+            with open(study_fpath, 'rb') as f:
                 study = pickle.load(f)
         else:
             study = optuna.create_study(study_name='early fixing')
