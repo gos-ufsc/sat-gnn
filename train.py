@@ -66,20 +66,47 @@ if __name__ == '__main__':
     # ).run()
 
     # Early fixing the solution to all jobs, including coupling constraints
-    instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
-    with open('97_9_opts.pkl', 'rb') as f:
-        opts = pickle.load(f)
-    EarlyFixingInstanceTrainer(
-        InstanceGCN(2, readout_op=None),
-        instances_fpaths=instances_fpaths,
-        optimals=opts,
-        batch_size=2**4,
-        epochs=100,
-        wandb_project=wandb_project,
-        wandb_group='EarlyFixingInstance-test-con-type-as-feature',
-        random_seed=seed,
-        device=device,
-    ).run()
+    for _ in range(1):
+        net = InstanceGCN(
+            2,
+            n_h_feats=4,
+            single_conv_for_both_passes=False,
+            n_passes=1,
+            conv1='SAGEConv',
+            conv1_kwargs={
+                'aggregator_type': 'lstm',
+                'feat_drop': 0.1,
+            },
+            conv2='SAGEConv',
+            conv2_kwargs={
+                'aggregator_type': 'lstm',
+                'feat_drop': 0.1,
+            },
+            conv3='SAGEConv',
+            conv3_kwargs={
+                'aggregator_type': 'lstm',
+                'feat_drop': 0.1,
+            },
+            readout_op=None,
+        )
+
+        instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
+        instances_fpaths = sorted(instances_fpaths)[:2]
+        with open('97_9_opts.pkl', 'rb') as f:
+            opts = pickle.load(f)
+
+        EarlyFixingInstanceTrainer(
+            InstanceGCN(2, readout_op=None),
+            instances_fpaths=instances_fpaths,
+            optimals=opts,
+            batch_size=2**4,
+            samples_per_problem=2**7,
+            epochs=100,
+            wandb_project=wandb_project,
+            wandb_group='EarlyFixingInstance-hypertuning-best',
+            random_seed=seed,
+            device=device,
+        ).run()
 
     # # Early fixing the solution to all jobs, including coupling constraints
     # instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
