@@ -489,7 +489,7 @@ class JobFeasibilityTrainer(Trainer):
         })
 
     def prepare_data(self):
-        data = SatsDataset(*load_data(self.instance_fpath))
+        data = SatsDataset(self.instance_fpath)
 
         n_train = 8000  # leave last job for testing
 
@@ -534,82 +534,6 @@ class JobFeasibilityTrainer(Trainer):
         return losses
 
 class EarlyFixingTrainer(Trainer):
-    def __init__(self, net: nn.Module, instance_fpath="data/raw/97_9.jl",
-                 epochs=5, lr=0.001, batch_size: int = 2**4, samples_per_problem: int = 1000,
-                 optimizer: str = 'Adam', optimizer_params: dict = None,
-                 loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
-                 lr_scheduler_params: dict = None, mixed_precision=False,
-                 device=None, wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None, timeout=np.inf) -> None:
-        super().__init__(net, epochs, lr, optimizer, optimizer_params,
-                         loss_func, lr_scheduler, lr_scheduler_params,
-                         mixed_precision, device, wandb_project, wandb_group,
-                         logger, checkpoint_every, random_seed, max_loss, timeout)
-
-        self.instance_fpath = Path(instance_fpath)
-        self.batch_size = batch_size
-        self.samples_per_problem = samples_per_problem
-
-        self._add_to_wandb_config({
-            "instance": self.instance_fpath.name,
-            "batch_size": self.batch_size,
-            "samples_per_problem": self.samples_per_problem,
-        })
-
-    def prepare_data(self):
-        A, b, c, resultados, objetivos = load_data(self.instance_fpath)
-
-        optimals = torch.from_numpy(np.array(
-            [resultados[i,j] for i,j in enumerate(objetivos.argmax(-1))]
-        ))
-
-        data = VarClassDataset(A, b, c, optimals,
-                               samples_per_problem=self.samples_per_problem)
-
-        # leave last job for testing
-        train_sampler = SubsetRandomSampler(torch.arange(self.samples_per_problem * (len(A) - 1)))
-        test_sampler = SubsetRandomSampler(torch.arange(self.samples_per_problem * (len(A) - 1), self.samples_per_problem * len(A)))
-
-        self.data = dgl.dataloading.GraphDataLoader(
-            data,
-            sampler=train_sampler,
-            batch_size=self.batch_size,
-            drop_last=False
-        )
-        self.val_data = dgl.dataloading.GraphDataLoader(
-            data,
-            sampler=test_sampler,
-            batch_size=self.batch_size,
-            drop_last=False
-        )
-
-    def get_loss_and_metrics(self, y_hat, y, validation=False):
-        loss_time, loss =  timeit(self._loss_func)(y_hat, y.float())
-
-        if validation:
-            y_pred = (torch.sigmoid(y_hat) > 0.5).squeeze(1).cpu().numpy().astype(int)
-            hits = sum(y_pred == y.cpu().numpy())
-            # here you can compute validation-specific metrics
-            return loss_time, loss, hits
-        else:
-            return loss_time, loss
-
-    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
-        # scale to data size
-        loss = loss / size
-
-        losses = {
-            'all': loss
-        }
-
-        if metrics is not None:
-            acc = sum(metrics) / size
-            losses['accuracy'] = acc.mean()
-            losses['accuracy_per_dimension'] = acc
-
-        return losses
-
-class EarlyFixingInstanceTrainer(EarlyFixingTrainer):
     def __init__(self, net: nn.Module, instances_fpaths: List[Path],
                  optimals: Path, epochs=5, lr=0.001, batch_size: int = 2 ** 4,
                  samples_per_problem: int = 1000, optimizer: str = 'Adam',
@@ -618,7 +542,7 @@ class EarlyFixingInstanceTrainer(EarlyFixingTrainer):
                  lr_scheduler_params: dict = None, mixed_precision=False,
                  device=None, wandb_project=None, wandb_group=None, logger=None,
                  checkpoint_every=50, random_seed=42, max_loss=None, timeout=np.inf) -> None:
-        super(EarlyFixingTrainer, self).__init__(
+        super().__init__(
             net, epochs, lr, optimizer, optimizer_params, loss_func,
             lr_scheduler, lr_scheduler_params, mixed_precision, device,
             wandb_project, wandb_group, logger, checkpoint_every, random_seed,
@@ -677,7 +601,33 @@ class EarlyFixingInstanceTrainer(EarlyFixingTrainer):
             drop_last=False
         )
 
-class OnlyXEarlyFixingInstanceTrainer(EarlyFixingInstanceTrainer):
+    def get_loss_and_metrics(self, y_hat, y, validation=False):
+        loss_time, loss =  timeit(self._loss_func)(y_hat, y.float())
+
+        if validation:
+            y_pred = (torch.sigmoid(y_hat) > 0.5).squeeze(1).cpu().numpy().astype(int)
+            hits = sum(y_pred == y.cpu().numpy())
+            # here you can compute validation-specific metrics
+            return loss_time, loss, hits
+        else:
+            return loss_time, loss
+
+    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
+        # scale to data size
+        loss = loss / size
+
+        losses = {
+            'all': loss
+        }
+
+        if metrics is not None:
+            acc = sum(metrics) / size
+            losses['accuracy'] = acc.mean()
+            losses['accuracy_per_dimension'] = acc
+
+        return losses
+
+class OnlyXEarlyFixingInstanceTrainer(EarlyFixingTrainer):
     def prepare_data(self):
         data = OnlyXInstanceEarlyFixingDataset(
             [load_instance(i) for i in self.instances_fpaths],

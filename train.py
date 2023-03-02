@@ -5,7 +5,7 @@ import torch
 import torch.nn
 
 from src.net import InstanceGCN, JobGCN
-from src.trainer import EarlyFixingInstanceTrainer, JobFeasibilityTrainer, EarlyFixingTrainer, OnlyXEarlyFixingInstanceTrainer, VariableResourceTrainer
+from src.trainer import EarlyFixingTrainer, JobFeasibilityTrainer, OnlyXEarlyFixingInstanceTrainer, VariableResourceTrainer
 from src.utils import debugger_is_active
 
 
@@ -95,7 +95,7 @@ if __name__ == '__main__':
         with open('97_9_opts.pkl', 'rb') as f:
             opts = pickle.load(f)
 
-        EarlyFixingInstanceTrainer(
+        EarlyFixingTrainer(
             InstanceGCN(2, readout_op=None),
             instances_fpaths=instances_fpaths,
             optimals=opts,

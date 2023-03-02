@@ -5,7 +5,7 @@ from optuna.trial import Trial
 import torch
 
 from src.net import InstanceGCN
-from src.trainer import EarlyFixingInstanceTrainer
+from src.trainer import EarlyFixingTrainer
 
 
 def get_objective(instances_fpaths: List[Path], opts, wandb_project=None,
@@ -76,7 +76,7 @@ def get_objective(instances_fpaths: List[Path], opts, wandb_project=None,
 
             batch_power = trial.suggest_int('batch_power', 2, 7)
             samples_per_problem_power = trial.suggest_int('samples_per_problem_power', 6, 10)
-            trainer = EarlyFixingInstanceTrainer(
+            trainer = EarlyFixingTrainer(
                 net,
                 instances_fpaths=instances_fpaths,
                 optimals=opts,
