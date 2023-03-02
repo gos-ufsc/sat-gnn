@@ -467,7 +467,7 @@ class Trainer(ABC):
 
         return fpath
 
-class FactibilityClassificationTrainer(Trainer):
+class JobFeasibilityTrainer(Trainer):
     def __init__(self, net: nn.Module, instance_fpath="data/raw/97_9.jl",
                  epochs=5, lr=0.001, batch_size: int = 2**4,
                  optimizer: str = 'Adam', optimizer_params: dict = None,

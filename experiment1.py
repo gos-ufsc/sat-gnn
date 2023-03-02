@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from src.net import JobGCN
-from src.trainer import FactibilityClassificationTrainer
+from src.trainer import JobFeasibilityTrainer
 from src.utils import debugger_is_active
 
 if __name__ == '__main__':
@@ -17,7 +17,7 @@ if __name__ == '__main__':
         wandb_project = 'sat-gnn'
 
     # Classification of the graph+candidate solution into feasible or not
-    FactibilityClassificationTrainer(
+    JobFeasibilityTrainer(
         JobGCN(2, 1),
         instance_fpath=Path('data/raw/97_9.jl'),
         batch_size=2**5,

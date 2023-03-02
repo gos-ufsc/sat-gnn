@@ -5,7 +5,7 @@ import torch
 import torch.nn
 
 from src.net import InstanceGCN, JobGCN
-from src.trainer import EarlyFixingInstanceTrainer, FactibilityClassificationTrainer, EarlyFixingTrainer, OnlyXEarlyFixingInstanceTrainer, VariableResourceTrainer
+from src.trainer import EarlyFixingInstanceTrainer, JobFeasibilityTrainer, EarlyFixingTrainer, OnlyXEarlyFixingInstanceTrainer, VariableResourceTrainer
 from src.utils import debugger_is_active
 
 
