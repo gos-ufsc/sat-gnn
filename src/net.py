@@ -44,6 +44,12 @@ class JobGCN(nn.Module):
 
         self.readout_op = readout_op
 
+        # downscale all weights
+        def downscale_weights(module):
+            if isinstance(module, torch.nn.Linear):
+                module.weight.data /= 10
+        self.apply(downscale_weights)
+
     def forward(self, g):
         var_features = g.nodes['var'].data['x'].view(-1,self.n_var_feats)
         con_features = g.nodes['con'].data['x'].view(-1,self.n_con_feats)
