@@ -1,4 +1,6 @@
 from copy import deepcopy
+from pathlib import Path
+import pickle
 
 import dgl
 import gurobipy
@@ -6,7 +8,7 @@ import numpy as np
 import torch
 from dgl.data import DGLDataset
 
-from src.problem import get_model
+from src.problem import get_model, load_instance
 
 
 class GraphDataset(DGLDataset):
@@ -51,14 +53,53 @@ class GraphDataset(DGLDataset):
     def __getitem__(self, idx):
         return deepcopy(self.gs[idx])
 
-class SatsDataset(GraphDataset):
+class JobFeasibilityDataset(GraphDataset):
     """Classification of valid solutions for IP problems.
     """
-    def __init__(self, As, bs, cs, resultados, objetivos,
-                 name='Satisfiability of Solutions', **kwargs) -> None:
-        super().__init__(As, bs, cs, name=name, **kwargs)
+    def __init__(self, instance, name='Satisfiability of Solutions',
+                 **kwargs) -> None:
+        if isinstance(instance, str) or isinstance(instance, Path):
+            instance = load_instance(instance)
+
+        T = instance['tamanho'][0]
+        J = instance['jobs'][0]
+        JOBS = J
+
+        As = []
+        resultados = [[] for _ in range(JOBS)]
+        bs = []
+        cs = []
+        objetivos = []
+        for job in range(JOBS):
+            model = get_model(job, instance)
+            #print(resultados, objetivos)
+            As.append(model.getA().toarray())
+            #resultados.append(np.array(resultados))
+            bs.append(np.array(model.getAttr('rhs')))
+            cs.append(np.array(model.getAttr('obj')))
+
+            As[job].shape, bs[job].shape, cs[job].shape
+            # TODO: this absolute path here is flimsy, I should do sth about it
+            with open('/home/bruno/sat-gnn/data/processed/resultados_'+str(job)+'.pkl', 'rb') as f:
+                resultadosX = pickle.load(f)
+            with open('/home/bruno/sat-gnn/data/processed/objetivos_'+str(job)+'.pkl', 'rb') as f:
+                objetivos.append(pickle.load(f))
+
+            resultados[job] = [[] for i in range(len(resultadosX))]
+            for i in range(len(resultados[job])):
+                x = resultadosX[i]
+                phi = np.zeros_like(x)
+                phi[0] = x[0]
+                for t in range(1, T):
+                    phi[t] = np.maximum(x[t]-x[t-1], 0)
+                resultados[job][i] = list(resultadosX[i]) + list(phi)
+
+        objetivos = np.array(objetivos)
+        resultados = np.array(resultados)
 
         assert len(As) == len(resultados) == len(objetivos)
+
+        super().__init__(As, bs, cs, name=name, **kwargs)
 
         # parse X and y
         self._Xs = torch.from_numpy(resultados).double()

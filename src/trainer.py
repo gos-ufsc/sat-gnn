@@ -15,8 +15,8 @@ import wandb
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.sampler import SubsetRandomSampler
 
-from src.problem import get_soc, get_model, load_data, load_instance
-from src.dataset import InstanceEarlyFixingDataset, OnlyXInstanceEarlyFixingDataset, ResourceDataset, SatsDataset, VarClassDataset
+from src.problem import get_soc, load_instance
+from src.dataset import InstanceEarlyFixingDataset, OnlyXInstanceEarlyFixingDataset, ResourceDataset, JobFeasibilityDataset, VarClassDataset
 from src.utils import timeit
 
 
@@ -489,7 +489,7 @@ class JobFeasibilityTrainer(Trainer):
         })
 
     def prepare_data(self):
-        data = SatsDataset(self.instance_fpath)
+        data = JobFeasibilityDataset(self.instance_fpath)
 
         n_train = 8000  # leave last job for testing
 

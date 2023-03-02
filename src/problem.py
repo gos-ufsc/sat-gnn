@@ -208,48 +208,6 @@ def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False,
 
     return model
 
-def load_data(instance):
-    if isinstance(instance, str) or isinstance(instance, Path):
-        instance = load_instance(instance)
-
-    T = instance['tamanho'][0]
-    J = instance['jobs'][0]
-    JOBS = J
-
-    A = []
-    resultados = [[] for i in range(JOBS)]
-    b = []
-    c = []
-    objetivos = []
-    for job in range(JOBS):
-        model = get_model(job, instance)
-        #print(resultados, objetivos)
-        A.append(model.getA().toarray())
-        #resultados.append(np.array(resultados))
-        b.append(np.array(model.getAttr('rhs')))
-        c.append(np.array(model.getAttr('obj')))
-
-        A[job].shape, b[job].shape, c[job].shape
-        # TODO: this absolute path here is flimsy, I should do sth about it
-        with open('/home/bruno/sat-gnn/data/processed/resultados_'+str(job)+'.pkl', 'rb') as f:
-            resultadosX = pickle.load(f)
-        with open('/home/bruno/sat-gnn/data/processed/objetivos_'+str(job)+'.pkl', 'rb') as f:
-            objetivos.append(pickle.load(f))
-
-        resultados[job] = [[] for i in range(len(resultadosX))]
-        for i in range(len(resultados[job])):
-            x = resultadosX[i]
-            phi = np.zeros_like(x)
-            phi[0] = x[0]
-            for t in range(1, T):
-                phi[t] = np.maximum(x[t]-x[t-1], 0)
-            resultados[job][i] = list(resultadosX[i]) + list(phi)
-
-    objetivos = np.array(objetivos)
-    resultados = np.array(resultados)
-
-    return A, b, c, resultados, objetivos
-
 def get_coupling_constraints(X, instance, r=None):
     J = instance['jobs'][0]
     T = instance['tamanho'][0]
