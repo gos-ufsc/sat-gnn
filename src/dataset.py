@@ -116,7 +116,7 @@ class GraphDataset(DGLDataset):
 class JobFeasibilityDataset(GraphDataset):
     """Classification of valid solutions for IP problems.
     """
-    def __init__(self, instance, name='Satisfiability of Solutions',
+    def __init__(self, instance, name='Satisfiability of Solutions - Job',
                  **kwargs) -> None:
         if isinstance(instance, str) or isinstance(instance, Path):
             instance = load_instance(instance)
@@ -138,7 +138,6 @@ class JobFeasibilityDataset(GraphDataset):
             bs.append(np.array(model.getAttr('rhs')))
             cs.append(np.array(model.getAttr('obj')))
 
-            As[job].shape, bs[job].shape, cs[job].shape
             # TODO: this absolute path here is flimsy, I should do sth about it
             with open('/home/bruno/sat-gnn/data/processed/resultados_'+str(job)+'.pkl', 'rb') as f:
                 resultadosX = pickle.load(f)
@@ -184,6 +183,34 @@ class JobFeasibilityDataset(GraphDataset):
         ))
 
         return g, y
+
+class SatelliteFeasibilityDataset(JobFeasibilityDataset):
+    def __init__(self, instances_fpaths, name='Satisfiability of Solutions - Satellite', **kwargs) -> None:
+        DGLDataset.__init__(self, name, **kwargs)
+
+        # TODO: fix this absolute path
+        with open('/home/bruno/sat-gnn/97_9_sols.pkl', 'rb') as f:
+            solutions = pickle.load(f)
+
+        self.gs = list()
+        candidates = list()
+        labels = list()
+        for instance_fpath in instances_fpaths:
+            instance = load_instance(instance_fpath)
+
+            jobs = list(range(instance['jobs'][0]))
+            model = get_model(jobs, instance, coupling=True)
+            self.gs.append(make_graph_from_model(model))
+
+            solution = solutions[instance_fpath.name]
+            candidates.append(solution['sol'])
+            labels.append(solution['label'])
+
+        candidates = np.array(candidates)
+        labels = np.array(labels)
+
+        self._Xs = torch.from_numpy(candidates).double()
+        self._ys = torch.from_numpy((labels < 1).astype(float)).double()
 
 class VarClassDataset(GraphDataset):
     """Classification of variable within solution.
