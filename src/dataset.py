@@ -76,10 +76,10 @@ class SatsDataset(GraphDataset):
 
         g = deepcopy(self.gs[i_])
         curr_feats = g.nodes['var'].data['x']
-        g.nodes['var'].data['x'] = torch.vstack((
-            # unsqueeze batch dimension, if necessary
-            curr_feats.view(-1,curr_feats.shape[-1]),
-            x.view(-1,x.shape[-1]),
+        g.nodes['var'].data['x'] = torch.hstack((
+            # unsqueeze features dimension, if necessary
+            curr_feats.view(curr_feats.shape[0],-1),
+            x.view(x.shape[-1],-1),
         ))
 
         return g, y
