@@ -11,41 +11,101 @@ from dgl.data import DGLDataset
 from src.problem import get_model, load_instance
 
 
+def make_graph_from_matrix(A, b, c):
+    # create graph
+    n_var = c.shape[0]
+    n_con = b.shape[0]
+
+    edges = np.indices(A.shape)  # cons -> vars
+
+    # get only real (non-null) edges
+    A_ = A.flatten()
+    edges = edges.reshape(edges.shape[0],-1)
+    edges = edges[:,A_ != 0]
+    edges = torch.from_numpy(edges)
+
+    edge_weights = A_[A_ != 0]
+
+    g = dgl.heterograph({('var', 'v2c', 'con'): (edges[1], edges[0]),
+                            ('con', 'c2v', 'var'): (edges[0], edges[1]),},
+                            num_nodes_dict={'var': n_var, 'con': n_con,})
+
+    g.edges['v2c'].data['A'] = torch.from_numpy(edge_weights)
+    g.edges['c2v'].data['A'] = torch.from_numpy(edge_weights)
+
+    g.nodes['var'].data['x'] = torch.from_numpy(c)
+    g.nodes['con'].data['x'] = torch.from_numpy(b)
+
+    return g
+
+def make_graph_from_model(model):
+    A = model.getA().toarray()
+    b = np.array(model.getAttr('rhs'))
+    c = np.array(model.getAttr('obj'))
+
+    # get only real (non-null) edges
+    A_ = A.flatten()
+    edges = np.indices(A.shape)  # cons -> vars
+    edges = edges.reshape(edges.shape[0],-1)
+    edges = edges[:,A_ != 0]
+    # edges = torch.from_numpy(edges)
+
+    edge_weights = A_[A_ != 0]
+
+    constraints_sense = np.array([ci.sense for ci in model.getConstrs()])
+    constraints_sense = np.array(list(map({'>': 1, '=': 0, '<': -1}.__getitem__, constraints_sense)))
+
+    vars_names = [v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()]
+    # grab all non-decision variables (everything that is not `x` or `phi`)
+    soc_vars_mask = np.array([('x(' not in v) and ('phi(' not in v) for v in vars_names])
+    soc_vars = np.arange(soc_vars_mask.shape[0])[soc_vars_mask]
+    var_vars = np.arange(soc_vars_mask.shape[0])[~soc_vars_mask]
+    soc_edges_mask = np.isin(edges.T[:,1], soc_vars)
+
+    var_edges = edges[:,~soc_edges_mask]
+    soc_edges = edges[:,soc_edges_mask]
+
+    # translate soc/var nodes index to 0-based
+    soc_edges[1] = np.array(list(map(
+        dict(zip(soc_vars, np.arange(soc_vars.shape[0]))).get,
+        soc_edges[1]
+    )))
+    var_edges[1] = np.array(list(map(
+        dict(zip(var_vars, np.arange(var_vars.shape[0]))).get,
+        var_edges[1]
+    )))
+
+    g = dgl.heterograph({
+        ('var', 'v2c', 'con'): (var_edges[1], var_edges[0]),
+        ('con', 'c2v', 'var'): (var_edges[0], var_edges[1]),
+        ('soc', 's2c', 'con'): (soc_edges[1], soc_edges[0]),
+        ('con', 'c2s', 'soc'): (soc_edges[0], soc_edges[1]),
+    })
+
+    soc_edge_weights = edge_weights[soc_edges_mask]
+    g.edges['s2c'].data['A'] = torch.from_numpy(soc_edge_weights)
+    g.edges['c2s'].data['A'] = torch.from_numpy(soc_edge_weights)
+
+    var_edge_weights = edge_weights[~soc_edges_mask]
+    g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_weights)
+    g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_weights)
+
+    g.nodes['con'].data['x'] = torch.from_numpy(np.stack(
+        (b, constraints_sense), -1
+    ))
+
+    g.nodes['var'].data['x'] = torch.from_numpy(c[~soc_vars_mask])
+    g.nodes['soc'].data['x'] = torch.from_numpy(c[soc_vars_mask])
+
+    return g
+
 class GraphDataset(DGLDataset):
     def __init__(self, As, bs, cs, name='Graphs', **kwargs):
         super().__init__(name, **kwargs)
 
         assert len(As) == len(bs) == len(cs)
 
-        self.gs = [self.make_graph(A, b, c) for A, b, c in zip(As, bs, cs)]
-
-    @staticmethod
-    def make_graph(A, b, c):
-        # create graph
-        n_var = c.shape[0]
-        n_con = b.shape[0]
-
-        edges = np.indices(A.shape)  # cons -> vars
-
-        # get only real (non-null) edges
-        A_ = A.flatten()
-        edges = edges.reshape(edges.shape[0],-1)
-        edges = edges[:,A_ != 0]
-        edges = torch.from_numpy(edges)
-
-        edge_weights = A_[A_ != 0]
-
-        g = dgl.heterograph({('var', 'v2c', 'con'): (edges[1], edges[0]),
-                             ('con', 'c2v', 'var'): (edges[0], edges[1]),},
-                             num_nodes_dict={'var': n_var, 'con': n_con,})
-
-        g.edges['v2c'].data['A'] = torch.from_numpy(edge_weights)
-        g.edges['c2v'].data['A'] = torch.from_numpy(edge_weights)
-
-        g.nodes['var'].data['x'] = torch.from_numpy(c)
-        g.nodes['con'].data['x'] = torch.from_numpy(b)
-
-        return g
+        self.gs = [make_graph_from_matrix(A, b, c) for A, b, c in zip(As, bs, cs)]
 
     def __len__(self):
         return len(self.gs)
@@ -184,70 +244,8 @@ class ResourceDataset(DGLDataset):
             m = get_model(list(range(self._J)), instance, coupling=True,
                           recurso=recurso)
 
-            self.gs.append(self.make_graph(m))
+            self.gs.append(make_graph_from_model(m))
             self.models.append(m)
-
-    @staticmethod
-    def make_graph(model):
-        A = model.getA().toarray()
-        b = np.array(model.getAttr('rhs'))
-        c = np.array(model.getAttr('obj'))
-
-        # get only real (non-null) edges
-        A_ = A.flatten()
-        edges = np.indices(A.shape)  # cons -> vars
-        edges = edges.reshape(edges.shape[0],-1)
-        edges = edges[:,A_ != 0]
-        # edges = torch.from_numpy(edges)
-
-        edge_weights = A_[A_ != 0]
-
-        constraints_sense = np.array([ci.sense for ci in model.getConstrs()])
-        constraints_sense = np.array(list(map({'>': 1, '=': 0, '<': -1}.__getitem__, constraints_sense)))
-
-        vars_names = [v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()]
-        # grab all non-decision variables (everything that is not `x` or `phi`)
-        soc_vars_mask = np.array([('x(' not in v) and ('phi(' not in v) for v in vars_names])
-        soc_vars = np.arange(soc_vars_mask.shape[0])[soc_vars_mask]
-        var_vars = np.arange(soc_vars_mask.shape[0])[~soc_vars_mask]
-        soc_edges_mask = np.isin(edges.T[:,1], soc_vars)
-
-        var_edges = edges[:,~soc_edges_mask]
-        soc_edges = edges[:,soc_edges_mask]
-
-        # translate soc/var nodes index to 0-based
-        soc_edges[1] = np.array(list(map(
-            dict(zip(soc_vars, np.arange(soc_vars.shape[0]))).get,
-            soc_edges[1]
-        )))
-        var_edges[1] = np.array(list(map(
-            dict(zip(var_vars, np.arange(var_vars.shape[0]))).get,
-            var_edges[1]
-        )))
-
-        g = dgl.heterograph({
-            ('var', 'v2c', 'con'): (var_edges[1], var_edges[0]),
-            ('con', 'c2v', 'var'): (var_edges[0], var_edges[1]),
-            ('soc', 's2c', 'con'): (soc_edges[1], soc_edges[0]),
-            ('con', 'c2s', 'soc'): (soc_edges[0], soc_edges[1]),
-        })
-
-        soc_edge_weights = edge_weights[soc_edges_mask]
-        g.edges['s2c'].data['A'] = torch.from_numpy(soc_edge_weights)
-        g.edges['c2s'].data['A'] = torch.from_numpy(soc_edge_weights)
-
-        var_edge_weights = edge_weights[~soc_edges_mask]
-        g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_weights)
-        g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_weights)
-
-        g.nodes['con'].data['x'] = torch.from_numpy(np.stack(
-            (b, constraints_sense), -1
-        ))
-
-        g.nodes['var'].data['x'] = torch.from_numpy(c[~soc_vars_mask])
-        g.nodes['soc'].data['x'] = torch.from_numpy(c[soc_vars_mask])
-
-        return g
 
     def __len__(self):
         return len(self.gs)
@@ -271,12 +269,8 @@ class InstanceEarlyFixingDataset(DGLDataset):
             jobs = list(range(instance['jobs'][0]))
             m = get_model(jobs, instance, coupling=True)
 
-            self.gs.append(self.make_graph(m))
+            self.gs.append(make_graph_from_model(m))
             self.models.append(m)
-
-    @staticmethod
-    def make_graph(model):
-        return ResourceDataset.make_graph(model)
 
     def __len__(self):
         return len(self.gs) * self.samples_per_problem
@@ -302,6 +296,7 @@ class InstanceEarlyFixingDataset(DGLDataset):
 class OnlyXInstanceEarlyFixingDataset(InstanceEarlyFixingDataset):
     def __init__(self, instances, optimals, samples_per_problem=1000,
                  name='Optimality of Dimensions - Instance (only X)', **kwargs):
+        raise DeprecationWarning
         super().__init__(instances, optimals, samples_per_problem, name,
                          **kwargs)
 
