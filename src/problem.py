@@ -28,7 +28,8 @@ def load_instance(fpath="data/raw/97_9.jl"):
 
     return instancia
 
-def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False):
+def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False,
+              timeout=60):
     if isinstance(instance, str) or isinstance(instance, Path):
         instance = load_instance(instance)
 
@@ -55,16 +56,16 @@ def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False):
     # create a model
     model = gurobipy.Model()
     model.Params.LogToConsole = 0
-    # model.setParam('PoolSearchMode', 1)
-    # model.setParam('PoolSolutions', 100000)
-    model.setParam('TimeLimit', 2*960)
-    # create decision variables
+
+    if timeout is not None:
+        model.setParam('TimeLimit', timeout)
 
     if isinstance(jobs, list):
         J_SUBSET = jobs
     else:
         J_SUBSET = [jobs]
 
+    # create decision variables
     x = {}
     phi = {}
     for j in J_SUBSET:
