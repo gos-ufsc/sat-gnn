@@ -16,7 +16,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from src.problem import get_soc, load_instance
-from src.dataset import InstanceEarlyFixingDataset, OnlyXInstanceEarlyFixingDataset, ResourceDataset, JobFeasibilityDataset, VarClassDataset
+from src.dataset import InstanceEarlyFixingDataset, OnlyXInstanceEarlyFixingDataset, ResourceDataset, JobFeasibilityDataset, SatelliteFeasibilityDataset
 from src.utils import timeit
 
 
@@ -532,6 +532,48 @@ class JobFeasibilityTrainer(Trainer):
             losses['accuracy'] = sum(metrics) / size
 
         return losses
+
+class SatelliteFeasibilityTrainer(JobFeasibilityTrainer):
+    def __init__(self, net: nn.Module, instances_fpaths: List,
+                 epochs=5, lr=0.001, batch_size: int = 2**4,
+                 optimizer: str = 'Adam', optimizer_params: dict = None,
+                 loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
+                 lr_scheduler_params: dict = None, mixed_precision=False,
+                 device=None, wandb_project=None, wandb_group=None, logger=None,
+                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        Trainer.__init__(self, net, epochs, lr, optimizer, optimizer_params,
+                         loss_func, lr_scheduler, lr_scheduler_params,
+                         mixed_precision, device, wandb_project, wandb_group,
+                         logger, checkpoint_every, random_seed, max_loss)
+
+        self.instances_fpaths = [Path(fp) for fp in instances_fpaths]
+        self.batch_size = batch_size
+
+        self._add_to_wandb_config({
+            "instances": [fp.name for fp in self.instances_fpaths],
+            "batch_size": self.batch_size,
+        })
+
+    def prepare_data(self):
+        data = SatelliteFeasibilityDataset(self.instances_fpaths)
+
+        n_train = 18 * 1000  # leave last job for testing
+
+        train_sampler = SubsetRandomSampler(torch.arange(n_train))
+        test_sampler = SubsetRandomSampler(torch.arange(n_train, len(data)))
+
+        self.data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=train_sampler,
+            batch_size=self.batch_size,
+            drop_last=False
+        )
+        self.val_data = dgl.dataloading.GraphDataLoader(
+            data,
+            sampler=test_sampler,
+            batch_size=self.batch_size,
+            drop_last=False
+        )
 
 class EarlyFixingTrainer(Trainer):
     def __init__(self, net: nn.Module, instances_fpaths: List[Path],
