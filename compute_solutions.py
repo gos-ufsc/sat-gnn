@@ -10,7 +10,7 @@ from src.problem import get_model, load_instance
 if __name__ == '__main__':
     instances_fps = list(Path('data/raw').glob('97_9*.jl'))
 
-    dst_fpath = f'97_9_sols.pkl'
+    dst_fpath = f'new_97_9_sols.pkl'
 
     try:
         with open(dst_fpath, 'rb') as f:
@@ -40,7 +40,7 @@ if __name__ == '__main__':
         for i in range(model.SolCount):
             model.Params.SolutionNumber = i
             objs.append(model.PoolObjVal)
-            sol = np.array([v.xn for v in model.getVars() if ('x(' in v.VarName) or ('phi(' in v.VarName)])
+            sol = np.array([v.xn for v in model.getVars() if 'x(' in v.VarName])
             sols.append(sol)
         model.Params.SolutionNumber = 0
 
@@ -48,13 +48,13 @@ if __name__ == '__main__':
         sols = np.array(sols)
 
         # small perturbations to the feasible solutions
-        perturbation = np.random.choice(2, sols.shape, p=[0.95, 0.05])
+        perturbation = np.random.choice(2, sols.shape, p=[0.99, 0.01])
         candidate_solutions = np.abs(sols - perturbation)
 
         infeas_solutions = list()
         for candidate_solution in candidate_solutions:
             model_ = model.copy()
-            vars_ = [v for v in model_.getVars() if ('x(' in v.VarName) or ('phi(' in v.VarName)]
+            vars_ = [v for v in model_.getVars() if 'x(' in v.VarName]
 
             # fix variables
             for v, c_solution in zip(vars_, candidate_solution):
@@ -67,7 +67,7 @@ if __name__ == '__main__':
 
             if model_.status == 3:
                 infeas_solutions.append(candidate_solution)
-            
+
             if len(infeas_solutions) >= 500:
                 break
 
