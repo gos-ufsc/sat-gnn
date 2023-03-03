@@ -3,8 +3,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from src.net import JobGCN
-from src.trainer import JobFeasibilityTrainer
+from src.net import InstanceGCN, JobGCN
+from src.trainer import JobFeasibilityTrainer, SatelliteFeasibilityTrainer
 from src.utils import debugger_is_active
 
 if __name__ == '__main__':
@@ -16,16 +16,26 @@ if __name__ == '__main__':
     else:
         wandb_project = 'sat-gnn'
 
-    # Classification of the graph+candidate solution into feasible or not
-    JobFeasibilityTrainer(
-        JobGCN(2, 1),
-        instance_fpath=Path('data/raw/97_9.jl'),
-        batch_size=2**5,
-        epochs=100,
-        wandb_project=wandb_project,
-        wandb_group='Experiment1 - Job',
-        # lr_scheduler='MultiplicativeLR',
-        # lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(10*(e/E - 1))},
-        random_seed=None,
-        device=device,
-    ).run()
+    for _ in range(5):
+        JobFeasibilityTrainer(
+            InstanceGCN(2),
+            instance_fpath=Path('data/raw/97_9.jl'),
+            batch_size=2**5,
+            epochs=70,
+            wandb_project=wandb_project,
+            wandb_group='Experiment1 - Job',
+            random_seed=None,
+            device=device,
+        ).run()
+
+    for _ in range(5):
+        SatelliteFeasibilityTrainer(
+            InstanceGCN(2),
+            instances_fpaths=Path('data/raw/').glob('97_9*.jl'),
+            batch_size=2**5,
+            epochs=70,
+            wandb_project=wandb_project,
+            wandb_group='Experiment1 - Instance',
+            random_seed=None,
+            device=device,
+        ).run()
