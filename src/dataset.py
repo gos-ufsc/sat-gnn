@@ -99,25 +99,13 @@ def make_graph_from_model(model):
 
     return g
 
-class GraphDataset(DGLDataset):
-    def __init__(self, As, bs, cs, name='Graphs', **kwargs):
-        super().__init__(name, **kwargs)
-
-        assert len(As) == len(bs) == len(cs)
-
-        self.gs = [make_graph_from_matrix(A, b, c) for A, b, c in zip(As, bs, cs)]
-
-    def __len__(self):
-        return len(self.gs)
-
-    def __getitem__(self, idx):
-        return deepcopy(self.gs[idx])
-
-class JobFeasibilityDataset(GraphDataset):
+class JobFeasibilityDataset(DGLDataset):
     """Classification of valid solutions for IP problems.
     """
     def __init__(self, instance, name='Satisfiability of Solutions - Job',
                  **kwargs) -> None:
+        super().__init__(name=name, **kwargs)
+
         if isinstance(instance, str) or isinstance(instance, Path):
             instance = load_instance(instance)
 
@@ -125,18 +113,13 @@ class JobFeasibilityDataset(GraphDataset):
         J = instance['jobs'][0]
         JOBS = J
 
-        As = []
         resultados = [[] for _ in range(JOBS)]
-        bs = []
-        cs = []
+        self.gs = list()
         objetivos = []
         for job in range(JOBS):
-            model = get_model(job, instance)
-            #print(resultados, objetivos)
-            As.append(model.getA().toarray())
-            #resultados.append(np.array(resultados))
-            bs.append(np.array(model.getAttr('rhs')))
-            cs.append(np.array(model.getAttr('obj')))
+            model = get_model(job, instance, coupling=False)
+
+            self.gs.append(make_graph_from_model(model))
 
             # TODO: this absolute path here is flimsy, I should do sth about it
             with open('/home/bruno/sat-gnn/data/processed/resultados_'+str(job)+'.pkl', 'rb') as f:
@@ -156,9 +139,7 @@ class JobFeasibilityDataset(GraphDataset):
         objetivos = np.array(objetivos)
         resultados = np.array(resultados)
 
-        assert len(As) == len(resultados) == len(objetivos)
-
-        super().__init__(As, bs, cs, name=name, **kwargs)
+        assert len(self.gs) == len(resultados) == len(objetivos)
 
         # parse X and y
         self._Xs = torch.from_numpy(resultados).double()
@@ -203,52 +184,63 @@ class SatelliteFeasibilityDataset(JobFeasibilityDataset):
             self.gs.append(make_graph_from_model(model))
 
             solution = solutions[instance_fpath.name]
-            candidates.append(solution['sol'])
+
+            # compute phis from decision variables
+            x = solution['sol'].astype(int).reshape(1000,len(jobs),-1)
+            phi = np.zeros_like(x)
+            phi[:,:,0] = x[:,:,0]
+            for t in range(1, x.shape[-1]):
+                phi[:,:,t] = (x[:,:,t] > x[:,:,t-1]).astype(int)
+
+            candidates.append(np.hstack((
+                x.reshape(x.shape[0],-1),
+                phi.reshape(phi.shape[0],-1),
+            )))
             labels.append(solution['label'])
 
         candidates = np.array(candidates)
         labels = np.array(labels)
 
         self._Xs = torch.from_numpy(candidates).double()
-        self._ys = torch.from_numpy((labels < 1).astype(float)).double()
+        self._ys = torch.from_numpy((labels.astype(int) == 0).astype(float)).double()
 
-class VarClassDataset(GraphDataset):
-    """Classification of variable within solution.
+# class VarClassDataset(GraphDataset):
+#     """Classification of variable within solution.
     
-    Provides the problem (A,b,c encoded as a graph) and a random candidate
-    solution. The label is 1 for each dimension that is equal to the optimal
-    solution.
-    """
-    def __init__(self, As, bs, cs, optimals, samples_per_problem=1e3, name='Optimality of Dimensions',
-                 **kwargs):
-        super().__init__(As, bs, cs, name=name, **kwargs)
+#     Provides the problem (A,b,c encoded as a graph) and a random candidate
+#     solution. The label is 1 for each dimension that is equal to the optimal
+#     solution.
+#     """
+#     def __init__(self, As, bs, cs, optimals, samples_per_problem=1e3, name='Optimality of Dimensions',
+#                  **kwargs):
+#         super().__init__(As, bs, cs, name=name, **kwargs)
 
-        assert len(optimals) == len(As)
+#         assert len(optimals) == len(As)
 
-        self._optimals = torch.from_numpy(np.array(optimals))
+#         self._optimals = torch.from_numpy(np.array(optimals))
 
-        self.samples_per_problem = int(samples_per_problem)
+#         self.samples_per_problem = int(samples_per_problem)
 
-    def __len__(self):
-        return super().__len__() * self.samples_per_problem
+#     def __len__(self):
+#         return super().__len__() * self.samples_per_problem
 
-    def __getitem__(self, idx):
-        i = idx // self.samples_per_problem
+#     def __getitem__(self, idx):
+#         i = idx // self.samples_per_problem
 
-        opt = self._optimals[i]
+#         opt = self._optimals[i]
 
-        x = torch.randint(0, 2, opt.shape)  # generate random candidate
-        y = (x == opt).type(x.type())
+#         x = torch.randint(0, 2, opt.shape)  # generate random candidate
+#         y = (x == opt).type(x.type())
 
-        g = super().__getitem__(i)
-        curr_feats = g.nodes['var'].data['x']
-        g.nodes['var'].data['x'] = torch.vstack((
-            # unsqueeze batch dimension, if necessary
-            curr_feats.view(-1,curr_feats.shape[-1]),
-            x.view(-1,x.shape[-1]),
-        ))
+#         g = super().__getitem__(i)
+#         curr_feats = g.nodes['var'].data['x']
+#         g.nodes['var'].data['x'] = torch.vstack((
+#             # unsqueeze batch dimension, if necessary
+#             curr_feats.view(-1,curr_feats.shape[-1]),
+#             x.view(-1,x.shape[-1]),
+#         ))
 
-        return g, y
+#         return g, y
 
 class ResourceDataset(DGLDataset):
     def __init__(self, instance, r_std=.1, n_samples=1000, name='Variable Resource', **kwargs):
