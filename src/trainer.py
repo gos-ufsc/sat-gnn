@@ -308,7 +308,7 @@ class Trainer(ABC):
             # average validation score over the past
             # `self._val_score_window_size` epochs
             score_window = min(self._val_score_window_size, len(self.val_scores))
-            val_score = np.mean(self.val_score[-score_window:])
+            val_score = np.mean(self.val_scores[-score_window:])
             if self._val_score_high_is_good:
                 val_score *= -1
 
@@ -507,10 +507,10 @@ class JobFeasibilityTrainer(Trainer):
     def prepare_data(self):
         data = JobFeasibilityDataset(self.instance_fpath)
 
-        n_train = 8000  # leave last job for testing
+        n_train = 7000  # leave last job for testing
 
         train_sampler = SubsetRandomSampler(torch.arange(n_train))
-        test_sampler = SubsetRandomSampler(torch.arange(n_train, len(data)))
+        test_sampler = SubsetRandomSampler(torch.arange(n_train, n_train+1000))
 
         self.data = dgl.dataloading.GraphDataLoader(
             data,
@@ -576,10 +576,10 @@ class SatelliteFeasibilityTrainer(JobFeasibilityTrainer):
     def prepare_data(self):
         data = SatelliteFeasibilityDataset(self.instances_fpaths)
 
-        n_train = 18 * 1000  # leave last job for testing
+        n_train = 17 * 1000  # leave last job for testing
 
         train_sampler = SubsetRandomSampler(torch.arange(n_train))
-        test_sampler = SubsetRandomSampler(torch.arange(n_train, len(data)))
+        test_sampler = SubsetRandomSampler(torch.arange(n_train, 19 * 1000))
 
         self.data = dgl.dataloading.GraphDataLoader(
             data,
