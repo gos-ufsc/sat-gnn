@@ -95,6 +95,8 @@ class Trainer(ABC):
         self.max_loss = max_loss
 
         self._val_score_label = 'all'
+        self._val_score_high_is_good = False
+        self._val_score_window_size = 5
 
     @classmethod
     def load_trainer(cls, net: nn.Module, run_id: str, wandb_project=None,
@@ -303,6 +305,13 @@ class Trainer(ABC):
 
             self.val_scores.append(val_score)
 
+            # average validation score over the past
+            # `self._val_score_window_size` epochs
+            score_window = min(self._val_score_window_size, len(self.val_scores))
+            val_score = np.mean(self.val_score[-score_window:])
+            if self._val_score_high_is_good:
+                val_score *= -1
+
             if self._log_to_wandb:
                 wandb.log(data_to_log, step=self._e, commit=True)
 
@@ -445,6 +454,10 @@ class Trainer(ABC):
         return losses, times
 
     def save_checkpoint(self):
+        best_val = self.best_val
+        if self._val_score_high_is_good:
+            best_val *= -1
+
         checkpoint = {
             'epoch': self._e,
             'best_val': self.best_val,
@@ -487,6 +500,9 @@ class JobFeasibilityTrainer(Trainer):
             "instance": self.instance_fpath.name,
             "batch_size": self.batch_size,
         })
+
+        self._val_score_label = 'accuracy'
+        self._val_score_high_is_good = True
 
     def prepare_data(self):
         data = JobFeasibilityDataset(self.instance_fpath)
@@ -554,6 +570,9 @@ class SatelliteFeasibilityTrainer(JobFeasibilityTrainer):
             "batch_size": self.batch_size,
         })
 
+        self._val_score_label = 'accuracy'
+        self._val_score_high_is_good = True
+
     def prepare_data(self):
         data = SatelliteFeasibilityDataset(self.instances_fpaths)
 
@@ -611,6 +630,7 @@ class EarlyFixingTrainer(Trainer):
         })
 
         self._val_score_label = 'accuracy'
+        self._val_score_high_is_good = True
 
     def prepare_data(self):
         data = InstanceEarlyFixingDataset(
