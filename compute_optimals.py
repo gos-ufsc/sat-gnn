@@ -10,17 +10,17 @@ from src.problem import get_model, load_instance
 
 
 if __name__ == '__main__':
-    instance_basename = '120_9'
+    instance_basename = '97_11'
 
     instances_fps = list(Path('data/raw').glob(instance_basename+'*.jl'))
 
-    dst_fpath = f'new_{instance_basename}_opts.pkl'
+    dst_fpath = f'{instance_basename}_opts.pkl'
 
     try:
         with open(dst_fpath, 'rb') as f:
             solutions = pickle.load(f)
 
-        instances_fps = [f for f in instances_fps if f not in solutions.keys()]
+        instances_fps = [f for f in instances_fps if f.name not in solutions.keys()]
     except FileNotFoundError:
         solutions = dict()
         pass
@@ -32,7 +32,7 @@ if __name__ == '__main__':
         instance = load_instance(str(fpath))
 
         jobs = list(range(instance['jobs'][0]))
-        model = get_model(jobs, fpath, coupling=True, new_ineq=True)
+        model = get_model(jobs, fpath, coupling=True, new_ineq=True, timeout=None)
 
         # model.Params.LogToConsole = 1
         model.update()
