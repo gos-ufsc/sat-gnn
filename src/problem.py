@@ -1,5 +1,6 @@
 from pathlib import Path
 import numpy as np
+import json
 import pickle
 import re
 import torch
@@ -8,6 +9,7 @@ from gurobipy import GRB
 
 
 def load_instance(fpath="data/raw/97_9.jl"):
+    print("THIS FUNCTION WAS FOR *.jl FILES")
     instancia = {}
     interesses = ["jobs", "recurso_p", "tamanho", "priority", "uso_p",
                   "min_statup", "max_statup", "min_cpu_time", "max_cpu_time",
@@ -21,7 +23,7 @@ def load_instance(fpath="data/raw/97_9.jl"):
                 if line.find(interesse) != -1:
                     if interesse == "uso_p" or interesse=="recurso_p":
                         dados = re.findall(r'\d+\.\d+',line)
-                        instancia[interesse] = [float(dado) for dado in dados]
+                        
                     else:
                         dados = re.findall(r'\d+',line)
                         instancia[interesse] = [int(dado) for dado in dados]
@@ -31,13 +33,16 @@ def load_instance(fpath="data/raw/97_9.jl"):
 def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False,
               timeout=60):
     if isinstance(instance, str) or isinstance(instance, Path):
-        instance = load_instance(instance)
+        with open(instance) as f:
+            instance = json.load(f)
 
     colunas_ = []
     lb = 0
-    T = instance['tamanho'][0]
+    # T = instance['tamanho'][0]
+    T = instance['T']
+
     if recurso is None:
-        recurso_p = instance['recurso_p']
+        recurso_p = instance['recurso_p = ']  # this was a typo while generating the instances
     else:
         recurso_p = recurso
     # print(recurso_p)
