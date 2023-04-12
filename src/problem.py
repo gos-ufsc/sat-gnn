@@ -22,15 +22,16 @@ def random_instance(T, jobs, subs=1):
     priority = np.arange(jobs) + 1
     np.random.shuffle(priority)
 
-    min_startup = np.random.randint(1, T // 10, size=jobs)
-    max_startup = np.random.rand(jobs)
-    max_startup = max_startup * (0.8 * T - min_startup) + min_startup
-    max_startup = max_startup.astype(int)
-
     min_cpu_time = np.random.randint(1, T / 5, size=jobs)
     max_cpu_time = np.random.rand(jobs)
     max_cpu_time = max_cpu_time * (0.5 * T - min_cpu_time) + min_cpu_time
     max_cpu_time = max_cpu_time.astype(int)
+
+    min_startup = np.random.rand() * (T / min_cpu_time - 1) + 1
+    min_startup = min_startup.astype(int)
+    max_startup = np.random.rand(jobs)
+    max_startup = max_startup * (0.8 * T - min_startup) + min_startup
+    max_startup = max_startup.astype(int)
 
     min_job_period = np.random.rand(jobs)
     min_job_period = min_job_period * (T / min_startup - min_cpu_time) + min_cpu_time
