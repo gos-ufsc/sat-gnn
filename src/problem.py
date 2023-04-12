@@ -8,33 +8,70 @@ import gurobipy
 from gurobipy import GRB
 
 
-def load_instance(fpath="data/raw/97_9.jl"):
-    print("THIS FUNCTION WAS FOR *.jl FILES")
-    instancia = {}
-    interesses = ["jobs", "recurso_p", "tamanho", "priority", "uso_p",
-                  "min_statup", "max_statup", "min_cpu_time", "max_cpu_time",
-                  "min_periodo_job", "max_periodo_job", "win_min", "win_max"]
+def random_instance(T, jobs, subs=1): 
+    orbit_power = np.loadtxt('/home/bruno/sat-gnn/data/raw/resource.csv')
 
-    for interesse in interesses:
-        with open(fpath, "r") as exemplo:
-            lines = exemplo.readlines()
-            for line in lines:
-                # check if string present on a current line
-                if line.find(interesse) != -1:
-                    if interesse == "uso_p" or interesse=="recurso_p":
-                        dados = re.findall(r'\d+\.\d+',line)
-                        
-                    else:
-                        dados = re.findall(r'\d+',line)
-                        instancia[interesse] = [int(dado) for dado in dados]
+    orbit_start = np.random.randint(0, 600)
+    power_resource = orbit_power[orbit_start:orbit_start+T]
 
-    return instancia
+    min_power = 0.01
+    max_power = 4.00
+    power_use = np.random.rand(jobs)
+    power_use = (max_power - min_power) * power_use + min_power
 
-def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False,
+    priority = np.arange(jobs) + 1
+    np.random.shuffle(priority)
+
+    min_startup = np.random.randint(1, T // 10, size=jobs)
+    max_startup = np.random.rand(jobs)
+    max_startup = max_startup * (0.8 * T - min_startup) + min_startup
+    max_startup = max_startup.astype(int)
+
+    min_cpu_time = np.random.randint(1, T / 5, size=jobs)
+    max_cpu_time = np.random.rand(jobs)
+    max_cpu_time = max_cpu_time * (0.5 * T - min_cpu_time) + min_cpu_time
+    max_cpu_time = max_cpu_time.astype(int)
+
+    min_job_period = np.random.rand(jobs)
+    min_job_period = min_job_period * (T / min_startup - min_cpu_time) + min_cpu_time
+    min_job_period = min_job_period.astype(int)
+
+    max_job_period = np.random.rand(jobs)
+    max_job_period = max_job_period * (T - min_job_period) + min_job_period
+    max_job_period = max_job_period.astype(int)
+
+    win = np.eye(jobs)[0].astype(int)
+    np.random.shuffle(win)
+    win_min = win * np.random.randint(1, T * 1/5)
+    win_max = win * np.random.randint(T * 4/5, T)
+    win_max[win_max == 0] = T
+
+    return {
+        "subs": subs,
+        "jobs": jobs,
+        "T": T,
+
+        "power_use": power_use.tolist(),
+        "power_resource": power_resource.tolist(),
+
+        "min_cpu_time": min_cpu_time.tolist(),
+        "max_cpu_time": max_cpu_time.tolist(),
+        "min_job_period": min_job_period.tolist(),
+        "max_job_period": max_job_period.tolist(),
+        "min_startup": min_startup.tolist(),
+        "max_startup": max_startup.tolist(),
+        "priority": priority.tolist(),
+        "win_min": win_min.tolist(),
+        "win_max": win_max.tolist(),
+    }
+
+def get_model(instance, coupling=False, recurso=None, new_ineq=False,
               timeout=60):
     if isinstance(instance, str) or isinstance(instance, Path):
         with open(instance) as f:
             instance = json.load(f)
+    
+    jobs = list(range(instance['jobs']))
 
     colunas_ = []
     lb = 0
@@ -42,19 +79,19 @@ def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False,
     T = instance['T']
 
     if recurso is None:
-        recurso_p = instance['recurso_p = ']  # this was a typo while generating the instances
+        recurso_p = instance['power_resource']  # this was a typo while generating the instances
     else:
         recurso_p = recurso
     # print(recurso_p)
 
     priority = instance['priority'] # prioridade de cada tarefa
-    uso_p = instance['uso_p'] # recurso utilizado por cada tarefa
-    min_statup = instance['min_statup'] # tempo mínimo de vezes que uma tarefa pode iniciar
-    max_statup = instance['max_statup'] # tempo máximo de vezes que uma tarefa pode iniciar
+    uso_p = instance['power_use'] # recurso utilizado por cada tarefa
+    min_statup = instance['min_startup'] # tempo mínimo de vezes que uma tarefa pode iniciar
+    max_statup = instance['max_startup'] # tempo máximo de vezes que uma tarefa pode iniciar
     min_cpu_time = instance['min_cpu_time'] # tempo mínimo de unidades de tempo que uma tarefa pode consumir em sequência
     max_cpu_time = instance['max_cpu_time'] # tempo máximo de unidades de tempo que uma tarefa pode consumir em sequência
-    min_periodo_job = instance['min_periodo_job'] # tempo mínimo que uma tarefa deve esperar para se repetir
-    max_periodo_job = instance['max_periodo_job'] # tempo máximo que uma tarefa pode esperar para se repetir
+    min_periodo_job = instance['min_job_period'] # tempo mínimo que uma tarefa deve esperar para se repetir
+    max_periodo_job = instance['max_job_period'] # tempo máximo que uma tarefa pode esperar para se repetir
     win_min = instance['win_min']
     win_max = instance['win_max']
 
