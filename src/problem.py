@@ -96,49 +96,49 @@ def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False,
     for t in range(T):
         for j in J_SUBSET:
             if t == 0:
-                    model.addConstr(phi[j,t] >= x[j,t] - 0)
+                    model.addConstr(phi[j,t] >= x[j,t] - 0, f"C1_j{j}_t{t}")
             else:
-                    model.addConstr(phi[j,t] >= x[j,t] - x[j,t - 1])
+                    model.addConstr(phi[j,t] >= x[j,t] - x[j,t - 1], f"C2_j{j}_t{t}")
 
-            model.addConstr(phi[j,t] <= x[j,t])
+            model.addConstr(phi[j,t] <= x[j,t], f"C3_j{j}_t{t}")
 
             if t == 0:
-                    model.addConstr(phi[j,t] <= 2 - x[j,t] - 0)
+                    model.addConstr(phi[j,t] <= 2 - x[j,t] - 0, f"C4_j{j}_t{t}")
             else:
-                    model.addConstr(phi[j,t] <= 2 - x[j,t] - x[j,t - 1])
+                    model.addConstr(phi[j,t] <= 2 - x[j,t] - x[j,t - 1], f"C5_j{j}_t{t}")
 
     # minimum and maximum number of startups of a job
     for j in J_SUBSET:
-        model.addConstr(sum(phi[j,t] for t in range(T)) >= min_statup[j])
-        model.addConstr(sum(phi[j,t] for t in range(T)) <= max_statup[j])
+        model.addConstr(sum(phi[j,t] for t in range(T)) >= min_statup[j], f"C6_j{j}")
+        model.addConstr(sum(phi[j,t] for t in range(T)) <= max_statup[j], f"C7_j{j}")
 
         ###############################
         # precisa ajustar
 
         # execution window
-        model.addConstr(sum(x[j,t] for t in range(win_min[j])) == 0)
-        model.addConstr(sum(x[j,t] for t in range(win_max[j], T)) == 0)
+        model.addConstr(sum(x[j,t] for t in range(win_min[j])) == 0, f"C8_j{j}")
+        model.addConstr(sum(x[j,t] for t in range(win_max[j], T)) == 0, f"C9_j{j}")
 
     for j in J_SUBSET:
         # minimum period between jobs
         for t in range(0, T - min_periodo_job[j] + 1):
-            model.addConstr(sum(phi[j,t_] for t_ in range(t, t + min_periodo_job[j])) <= 1)
+            model.addConstr(sum(phi[j,t_] for t_ in range(t, t + min_periodo_job[j])) <= 1, f"C10_j{j}_t{t}")
 
         # periodo máximo entre jobs
         for t in range(0, T - max_periodo_job[j] + 1):
-            model.addConstr(sum(phi[j,t_] for t_ in range(t, t + max_periodo_job[j])) >= 1)
+            model.addConstr(sum(phi[j,t_] for t_ in range(t, t + max_periodo_job[j])) >= 1, f"C11_j{j}_t{t}")
 
         # min_cpu_time das jobs
         for t in range(0, T - min_cpu_time[j] + 1):
-            model.addConstr(sum(x[j,t_] for t_ in range(t, t + min_cpu_time[j])) >= min_cpu_time[j] * phi[j,t])
+            model.addConstr(sum(x[j,t_] for t_ in range(t, t + min_cpu_time[j])) >= min_cpu_time[j] * phi[j,t], f"C12_j{j}_t{t}")
 
         # max_cpu_time das jobs
         for t in range(0, T - max_cpu_time[j]):
-                model.addConstr(sum(x[j,t_] for t_ in range(t, t + max_cpu_time[j] + 1)) <= max_cpu_time[j])
+                model.addConstr(sum(x[j,t_] for t_ in range(t, t + max_cpu_time[j] + 1)) <= max_cpu_time[j], f"C13_j{j}_t{t}")
 
         # min_cpu_time no final do periodo
         for t in range(T - min_cpu_time[j] + 1, T):
-                model.addConstr(sum(x[j,t_] for t_ in range(t, T)) >= (T - t) * phi[j,t])
+                model.addConstr(sum(x[j,t_] for t_ in range(t, T)) >= (T - t) * phi[j,t], f"C14_j{j}_t{t}")
 
     if coupling:
         soc = {}
@@ -152,29 +152,29 @@ def get_model(jobs, instance, coupling=False, recurso=None, new_ineq=False,
         ################################
         # Add power constraints
         for t in range(T):
-            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) <= recurso_p[t] + bat_usage * v_bat)# * (1 - alpha[t]))
+            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) <= recurso_p[t] + bat_usage * v_bat, f"C15_t{t}")# * (1 - alpha[t]))
 
         ################################
         # Bateria
         ################################
         for t in range(T):
-            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) + b[t] == recurso_p[t])
+            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) + b[t] == recurso_p[t], f"C16_t{t}")
 
         # Define the i_t, SoC_t constraints in Gurobi
         for t in range(T):
             # P = V * I 
-            model.addConstr(b[t] / v_bat >= i[t])
+            model.addConstr(b[t] / v_bat >= i[t], f"C17_t{t}")
 
             if t == 0:
                 # SoC(1) = SoC(0) + p_carga[1]/60
-                model.addConstr(soc[t] == soc_inicial + (ef / q) * (i[t] / 60))
+                model.addConstr(soc[t] == soc_inicial + (ef / q) * (i[t] / 60), f"C18_t{t}")
             else:
                 # SoC(t) = SoC(t-1) + (ef / Q) * I(t)
-                model.addConstr(soc[t] == soc[t - 1] + (ef / q) * (i[t] / 60))
+                model.addConstr(soc[t] == soc[t - 1] + (ef / q) * (i[t] / 60), f"C19_t{t}")
 
             # Set the lower and upper limits on SoC
-            model.addConstr(limite_inferior <= soc[t])
-            model.addConstr(soc[t] <= 1)
+            model.addConstr(limite_inferior <= soc[t], f"C20_t{t}")
+            model.addConstr(soc[t] <= 1, f"C21_t{t}")
 
     if new_ineq:
         # first
