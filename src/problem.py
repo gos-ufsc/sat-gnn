@@ -9,7 +9,7 @@ from gurobipy import GRB
 
 
 def random_instance(T, jobs, subs=1): 
-    orbit_power = np.loadtxt('/home/bruno/sat-gnn/data/raw/resource.csv')
+    orbit_power = np.loadtxt('/mnt/hdd/Desktop/sat-gnn/data/raw/resource.csv')
 
     orbit_start = np.random.randint(0, 600)
     power_resource = orbit_power[orbit_start:orbit_start+T]
@@ -22,19 +22,21 @@ def random_instance(T, jobs, subs=1):
     priority = np.arange(jobs) + 1
     np.random.shuffle(priority)
 
-    min_cpu_time = np.random.randint(1, T / 5, size=jobs)
+    min_cpu_time = np.random.randint(1, T, size=jobs)
     max_cpu_time = np.random.rand(jobs)
-    max_cpu_time = max_cpu_time * (0.5 * T - min_cpu_time) + min_cpu_time
+    max_cpu_time = max_cpu_time * (T - min_cpu_time) + min_cpu_time
     max_cpu_time = max_cpu_time.astype(int)
 
-    min_startup = np.random.rand() * (T / min_cpu_time - 1) + 1
+    max_possible_startup = (T / min_cpu_time).astype(int)
+    min_startup = np.random.rand() * (max_possible_startup - 1) + 1
     min_startup = min_startup.astype(int)
     max_startup = np.random.rand(jobs)
-    max_startup = max_startup * (0.8 * T - min_startup) + min_startup
+    max_startup = max_startup * (T - min_startup) + min_startup
     max_startup = max_startup.astype(int)
 
+    max_possible_job_period = (T / min_startup).astype(int)
     min_job_period = np.random.rand(jobs)
-    min_job_period = min_job_period * (T / min_startup - min_cpu_time) + min_cpu_time
+    min_job_period = min_job_period * (max_possible_job_period - 1) + 1
     min_job_period = min_job_period.astype(int)
 
     max_job_period = np.random.rand(jobs)
