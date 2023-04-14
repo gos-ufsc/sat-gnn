@@ -9,7 +9,7 @@ from src.problem import get_model
 
 
 if __name__ == '__main__':
-    instances_fps = list(Path('data/raw').glob('*.json'))
+    instances_fps = list(Path('data/raw').glob('12*.json'))
 
     dst_fpath = Path('data/interim')/'solutions.pkl'
 
@@ -41,7 +41,8 @@ if __name__ == '__main__':
         for i in range(model.SolCount):
             model.Params.SolutionNumber = i
             objs.append(model.PoolObjVal)
-            sol = np.array([v.xn for v in model.getVars() if 'x(' in v.VarName])
+            # sol = np.array([v.xn for v in model.getVars() if 'x(' in v.VarName])
+            sol = np.array([v.xn for v in model.getVars()])
             sols.append(sol)
         model.Params.SolutionNumber = 0
 
@@ -50,5 +51,5 @@ if __name__ == '__main__':
             'objs': np.array(objs),
         }
 
-    with open(dst_fpath, 'wb') as f:
-        pickle.dump(solutions, f)
+        with open(dst_fpath, 'wb') as f:
+            pickle.dump(solutions, f)
