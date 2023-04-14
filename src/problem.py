@@ -9,7 +9,7 @@ from gurobipy import GRB
 
 
 def random_instance(T, jobs, subs=1): 
-    orbit_power = np.loadtxt('/mnt/hdd/Desktop/sat-gnn/data/raw/resource.csv')
+    orbit_power = np.loadtxt('/home/bruno/sat-gnn/data/raw/resource.csv')
 
     orbit_start = np.random.randint(0, 600)
     power_resource = orbit_power[orbit_start:orbit_start+T]
@@ -22,9 +22,9 @@ def random_instance(T, jobs, subs=1):
     priority = np.arange(jobs) + 1
     np.random.shuffle(priority)
 
-    min_cpu_time = np.random.randint(1, T, size=jobs)
+    min_cpu_time = np.random.randint(1, T / 5, size=jobs)
     max_cpu_time = np.random.rand(jobs)
-    max_cpu_time = max_cpu_time * (T - min_cpu_time) + min_cpu_time
+    max_cpu_time = max_cpu_time * (T / 2 - min_cpu_time) + min_cpu_time
     max_cpu_time = max_cpu_time.astype(int)
 
     max_possible_startup = (T / min_cpu_time).astype(int)
@@ -68,7 +68,7 @@ def random_instance(T, jobs, subs=1):
         "win_max": win_max.tolist(),
     }
 
-def get_model(instance, coupling=False, recurso=None, new_ineq=False,
+def get_model(instance, coupling=True, recurso=None, new_ineq=False,
               timeout=60):
     if isinstance(instance, str) or isinstance(instance, Path):
         with open(instance) as f:
@@ -116,7 +116,7 @@ def get_model(instance, coupling=False, recurso=None, new_ineq=False,
     for j in J_SUBSET:
         # the order in which we add the variables matter. I want all variables
         # associated with a given job to be together,
-        # like x(0,0),...,x(0,-1),phi(0,0),...phi(0,-1),x(1,0),...,x(1,-1),phi(1,0),...
+        # like x(0,0),...,x(0,T-1),phi(0,0),...phi(0,T-1),x(1,0),...,x(1,T-1),phi(1,0),...
         for t in range(T):
                 x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1, vtype=GRB.BINARY)
         for t in range(T):
