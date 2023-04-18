@@ -15,8 +15,8 @@ import wandb
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.sampler import SubsetRandomSampler
 
-from src.problem import get_soc, load_instance
-from src.dataset import InstanceEarlyFixingDataset, OnlyXInstanceEarlyFixingDataset, ResourceDataset, JobFeasibilityDataset, SatelliteFeasibilityDataset
+from src.problem import get_soc
+from src.dataset import InstanceDataset
 from src.utils import timeit
 
 
@@ -166,7 +166,8 @@ class Trainer(ABC):
             self._scheduler = Scheduler(self._optim, **self.lr_scheduler_params)
             self._scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
-        self._loss_func = eval(f"nn.{self.loss_func}()")
+        LossClass = eval(f"nn.{self.loss_func}")
+        self.load_loss_func(self, LossClass)
 
         if self.mixed_precision:
             self._scaler = GradScaler()
@@ -179,6 +180,9 @@ class Trainer(ABC):
         self._is_initalized = True
 
         return self
+
+    def load_loss_func(self, LossClass):
+        self._loss_func = LossClass()
 
     def setup_training(self):
         self.l.info('Setting up training')
@@ -202,7 +206,8 @@ class Trainer(ABC):
             self.l.info('Initializing wandb.')
             self.initialize_wandb()
 
-        self._loss_func = eval(f"nn.{self.loss_func}()")
+        LossClass = eval(f"nn.{self.loss_func}")
+        self.load_loss_func(LossClass)
 
         if self.mixed_precision:
             self._scaler = GradScaler()
@@ -480,125 +485,10 @@ class Trainer(ABC):
 
         return fpath
 
-class JobFeasibilityTrainer(Trainer):
-    def __init__(self, net: nn.Module, instance_fpath="data/raw/97_9.jl",
-                 epochs=5, lr=0.001, batch_size: int = 2**4,
-                 optimizer: str = 'Adam', optimizer_params: dict = None,
-                 loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
-                 lr_scheduler_params: dict = None, mixed_precision=False,
-                 device=None, wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
-        super().__init__(net, epochs, lr, optimizer, optimizer_params,
-                         loss_func, lr_scheduler, lr_scheduler_params,
-                         mixed_precision, device, wandb_project, wandb_group,
-                         logger, checkpoint_every, random_seed, max_loss)
-
-        self.instance_fpath = Path(instance_fpath)
-        self.batch_size = batch_size
-
-        self._add_to_wandb_config({
-            "instance": self.instance_fpath.name,
-            "batch_size": self.batch_size,
-        })
-
-        self._val_score_label = 'accuracy'
-        self._val_score_high_is_good = True
-
-    def prepare_data(self):
-        data = JobFeasibilityDataset(self.instance_fpath)
-
-        n_train = 7000  # leave last job for testing
-
-        train_sampler = SubsetRandomSampler(torch.arange(n_train))
-        test_sampler = SubsetRandomSampler(torch.arange(n_train, n_train+1000))
-
-        self.data = dgl.dataloading.GraphDataLoader(
-            data,
-            sampler=train_sampler,
-            batch_size=self.batch_size,
-            drop_last=False
-        )
-        self.val_data = dgl.dataloading.GraphDataLoader(
-            data,
-            sampler=test_sampler,
-            batch_size=self.batch_size,
-            drop_last=False
-        )
-
-    def get_loss_and_metrics(self, y_hat, y, validation=False):
-        loss_time, loss =  timeit(self._loss_func)(y_hat, y.unsqueeze(-1))
-
-        if validation:
-            y_pred = (torch.sigmoid(y_hat) > 0.5).squeeze(1).cpu().numpy().astype(int)
-            hits = sum(y_pred == y.cpu().numpy())
-            # here you can compute validation-specific metrics
-            return loss_time, loss, hits
-        else:
-            return loss_time, loss
-
-    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
-        # scale to data size
-        loss = loss / size
-
-        losses = {
-            'all': loss
-        }
-
-        if metrics is not None:
-            losses['accuracy'] = sum(metrics) / size
-
-        return losses
-
-class SatelliteFeasibilityTrainer(JobFeasibilityTrainer):
-    def __init__(self, net: nn.Module, instances_fpaths: List,
-                 epochs=5, lr=0.001, batch_size: int = 2**4,
-                 optimizer: str = 'Adam', optimizer_params: dict = None,
-                 loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
-                 lr_scheduler_params: dict = None, mixed_precision=False,
-                 device=None, wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
-        Trainer.__init__(self, net, epochs, lr, optimizer, optimizer_params,
-                         loss_func, lr_scheduler, lr_scheduler_params,
-                         mixed_precision, device, wandb_project, wandb_group,
-                         logger, checkpoint_every, random_seed, max_loss)
-
-        self.instances_fpaths = [Path(fp) for fp in instances_fpaths]
-        self.batch_size = batch_size
-
-        self._add_to_wandb_config({
-            "instances": [fp.name for fp in self.instances_fpaths],
-            "batch_size": self.batch_size,
-        })
-
-        self._val_score_label = 'accuracy'
-        self._val_score_high_is_good = True
-
-    def prepare_data(self):
-        data = SatelliteFeasibilityDataset(self.instances_fpaths)
-
-        n_train = 17 * 1000  # leave last job for testing
-
-        train_sampler = SubsetRandomSampler(torch.arange(n_train))
-        test_sampler = SubsetRandomSampler(torch.arange(n_train, 19 * 1000))
-
-        self.data = dgl.dataloading.GraphDataLoader(
-            data,
-            sampler=train_sampler,
-            batch_size=self.batch_size,
-            drop_last=False
-        )
-        self.val_data = dgl.dataloading.GraphDataLoader(
-            data,
-            sampler=test_sampler,
-            batch_size=self.batch_size,
-            drop_last=False
-        )
-
 class EarlyFixingTrainer(Trainer):
     def __init__(self, net: nn.Module, instances_fpaths: List[Path],
-                 optimals: Path, epochs=5, lr=0.001, batch_size: int = 2 ** 4,
-                 samples_per_problem: int = 1000, optimizer: str = 'Adam',
-                 optimizer_params: dict = None, n_instances_for_test=2,
+                 sols_dir='/home/bruno/sat-gnn/data/interim', epochs=5, lr=0.001,
+                 optimizer: str = 'Adam', optimizer_params: dict = None,
                  loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
                  lr_scheduler_params: dict = None, mixed_precision=False,
                  device=None, wandb_project=None, wandb_group=None, logger=None,
@@ -610,19 +500,12 @@ class EarlyFixingTrainer(Trainer):
             max_loss, timeout,
         )
 
-        assert len(optimals) >= len(instances_fpaths)
+        self.sols_dir = sols_dir
 
         self.instances_fpaths = [Path(i) for i in instances_fpaths]
-        self.batch_size = batch_size
-        self.samples_per_problem = samples_per_problem
-        self.optimals = optimals
-        self.n_instances_for_test = int(n_instances_for_test)
 
         self._add_to_wandb_config({
             "instances": [i.name for i in instances_fpaths],
-            "batch_size": self.batch_size,
-            "samples_per_problem": self.samples_per_problem,
-            "n_instances_for_test": self.n_instances_for_test,
             "n_passes": self.net.n_passes,
             "n_h_feats": self.net.n_h_feats,
             "single_conv": self.net.single_conv_for_both_passes,
@@ -632,45 +515,101 @@ class EarlyFixingTrainer(Trainer):
         self._val_score_label = 'accuracy'
         self._val_score_high_is_good = True
 
-    def prepare_data(self):
-        data = InstanceEarlyFixingDataset(
-            [load_instance(i) for i in self.instances_fpaths],
-            [self.optimals[i.name]['sol'] for i in self.instances_fpaths],
-            samples_per_problem=self.samples_per_problem,
-        )
+    def load_loss_func(self, LossClass):
+        self._loss_func = LossClass(reduction='none')
 
-        # leave last job for testing
-        train_sampler = SubsetRandomSampler(torch.arange(
-            self.samples_per_problem * (len(self.instances_fpaths)
-                                        - self.n_instances_for_test)
-        ))
-        test_sampler = SubsetRandomSampler(torch.arange(
-            self.samples_per_problem * (len(self.instances_fpaths)
-                                        - self.n_instances_for_test),
-            self.samples_per_problem * len(self.instances_fpaths)
-        ))
+    def prepare_data(self):
+        train_data = InstanceDataset(
+            self.instances_fpaths,
+            sols_dir=self.sols_dir,
+            split='train',
+        )
+        val_data = InstanceDataset(
+            self.instances_fpaths,
+            sols_dir=self.sols_dir,
+            split='val',
+        )
 
         self.data = dgl.dataloading.GraphDataLoader(
-            data,
-            sampler=train_sampler,
-            batch_size=self.batch_size,
-            drop_last=False,
+            train_data,
+            shuffle=True,
+            batch_size=1,
         )
         self.val_data = dgl.dataloading.GraphDataLoader(
-            data,
-            sampler=test_sampler,
-            batch_size=self.batch_size,
-            drop_last=False
+            val_data,
+            batch_size=1,
         )
 
-    def get_loss_and_metrics(self, y_hat, y, validation=False):
-        loss_time, loss =  timeit(self._loss_func)(y_hat, y.float())
+    def train_pass(self):
+        train_loss = 0
+        train_size = 0
+
+        forward_time = 0
+        loss_time = 0
+        backward_time = 0
+
+        self.net.train()
+        with torch.set_grad_enabled(True):
+            for g, (y, w) in self.data:
+                g = g.to(self.device)
+                y = y.to(self.device)
+                w = w.to(self.device)
+
+                self._optim.zero_grad()
+
+                with self.autocast_if_mp():
+                    forward_time_, output = timeit(self.net)(g)
+                    forward_time += forward_time_
+
+                    loss_time_, loss = self.get_loss_and_metrics(output, y, w)
+                    loss_time += loss_time_
+
+                if self.mixed_precision:
+                    backward_time_, _  = timeit(self._scaler.scale(loss).backward)()
+                    self._scaler.step(self._optim)
+                    self._scaler.update()
+                else:
+                    backward_time_, _  = timeit(loss.backward)()
+                    self._optim.step()
+                backward_time += backward_time_
+
+                train_loss += loss.item() * len(y)
+                train_size += len(y)
+
+            if self.lr_scheduler is not None:
+                self._scheduler.step()
+
+        losses = self.aggregate_loss_and_metrics(train_loss, train_size)
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+            'backward': backward_time,
+        }
+
+        return losses, times
+
+    def get_loss_and_metrics(self, output, y, w, validation=False):
+        # TODO: maybe rewrite things so that batch_size > 1 is possible
+        y = y.squeeze(0)
+        w = w.squeeze(0)
+
+        loss_time, loss =  timeit(self._loss_func)(
+            output.repeat((y.shape[0],1)),
+            y[:,:output.shape[-1]]
+        )
+        loss = (w / w.max(-1).values) @ loss.sum(-1)
 
         if validation:
-            y_pred = (torch.sigmoid(y_hat) > 0.5).squeeze(1).cpu().numpy().astype(int)
-            hits = sum(y_pred == y.cpu().numpy())
+            y_pred_ = (torch.sigmoid(output) > 0.5).squeeze(0).cpu().numpy().astype(int)
+            y_ = (y.cpu().numpy()[:,:len(y_pred_)] > 0.5).astype(int)
+            hit = y_pred_.tolist() in y_.tolist()
+            if hit:
+                hit_i = y_.tolist().index(y_pred_.tolist())
+                gap = w.max() - w[hit_i]
+            else:
+                gap = -1
             # here you can compute validation-specific metrics
-            return loss_time, loss, hits
+            return loss_time, loss, (hit, gap)
         else:
             return loss_time, loss
 
@@ -683,11 +622,52 @@ class EarlyFixingTrainer(Trainer):
         }
 
         if metrics is not None:
-            acc = sum(metrics) / size
-            losses['accuracy'] = acc.mean()
-            losses['accuracy_per_dimension'] = acc
+            hits = [m[0] for m in metrics]
+            gaps = [m[1] for m in metrics]
+
+            acc = sum(hits) / size
+            losses['accuracy'] = acc
+            try:
+                losses['mean_gap'] = sum(g for g in gaps if g != -1) / sum(1 for g in gaps if g != -1)
+            except ZeroDivisionError:
+                losses['mean_gap'] = torch.inf
 
         return losses
+
+    def validation_pass(self):
+        val_loss = 0
+        val_size = 0
+        val_metrics = list()
+
+        forward_time = 0
+        loss_time = 0
+
+        self.net.eval()
+        with torch.set_grad_enabled(False):
+            for g, (y, w) in self.val_data:
+                g = g.to(self.device)
+                y = y.to(self.device)
+                w = w.to(self.device)
+
+                with self.autocast_if_mp():
+                    forward_time_, output = timeit(self.net)(g)
+                    forward_time += forward_time_
+
+                    loss_time_, loss, metrics = self.get_loss_and_metrics(output, y, w, validation=True)
+                    loss_time += loss_time_
+
+                    val_metrics.append(metrics)
+
+                val_loss += loss.item() * len(y)  # scales to data size
+                val_size += len(y)
+
+        losses = self.aggregate_loss_and_metrics(val_loss, val_size, val_metrics)
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+        }
+
+        return losses, times
 
 class OnlyXEarlyFixingInstanceTrainer(EarlyFixingTrainer):
     def prepare_data(self):
