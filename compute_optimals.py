@@ -1,54 +1,46 @@
+import json
 from pathlib import Path
 from tqdm import tqdm
 
 from gurobipy import GRB
 
-import pickle
 import numpy as np
 
-from src.problem import get_model, load_instance
+from src.problem import get_model
 
 
 if __name__ == '__main__':
-    instance_basename = '97_11'
+    instances_fps = list(Path('data/raw').glob('97_*.json'))
 
-    instances_fps = list(Path('data/raw').glob(instance_basename+'*.jl'))
+    dst_dir = Path('data/interim')
 
-    dst_fpath = f'{instance_basename}_opts.pkl'
+    dst_fpath = f'97_opts.pkl'
 
     try:
-        with open(dst_fpath, 'rb') as f:
-            solutions = pickle.load(f)
+        solutions_fpaths = dst_dir.glob('*_opt.npz')
+        solutions = [fp.name[:-len('_opt.npz')] for fp in solutions_fpaths]
 
-        instances_fps = [f for f in instances_fps if f.name not in solutions.keys()]
+        instances_fps = [f for f in instances_fps if f.name[:-len('.json')] not in solutions]
     except FileNotFoundError:
-        solutions = dict()
         pass
 
     for fpath in tqdm(instances_fps):
-        instance_name = fpath.name
-        print(instance_name)
+        instance_name = fpath.name[:-len('.json')]
 
-        instance = load_instance(str(fpath))
+        with open(fpath) as f:
+            instance = json.load(f)
 
-        jobs = list(range(instance['jobs'][0]))
-        model = get_model(jobs, fpath, coupling=True, new_ineq=True, timeout=None)
-
-        # model.Params.LogToConsole = 1
+        model = get_model(fpath, coupling=True, new_ineq=True, timeout=300)
         model.update()
 
         model.optimize()
-
-        print(model.MIPGap)
 
         X = np.array([v.X for v in model.getVars()])
         model_vars = np.core.defchararray.array([v.getAttr(GRB.Attr.VarName) for v in model.getVars()])
         X = X[(model_vars.find('x') >= 0) | (model_vars.find('phi') >= 0)]
 
-        solutions[instance_name] = {
-            'obj': model.ObjVal,
-            'sol': X,
-        }
+        obj = model.ObjVal
+        gap = model.MIPGap
+        runtime = model.Runtime
 
-    with open(dst_fpath, 'wb') as f:
-        pickle.dump(solutions, f)
+        np.savez(dst_dir/(instance_name + '_opt.npz'), obj, gap, runtime, X)
