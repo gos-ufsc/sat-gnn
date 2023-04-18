@@ -194,3 +194,6 @@ data/
 
 # ignore models
 *.pth
+
+# ignore old stuff
+old/
