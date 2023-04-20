@@ -97,11 +97,11 @@ class JobGCN(nn.Module):
 class InstanceGCN(nn.Module):
     """Expects all features to be on the `x` data.
     """
-    def __init__(self, n_var_feats, n_con_feats=2, n_soc_feats=1, n_h_feats=10,
-                 single_conv_for_both_passes=False, n_passes=1,
-                 conv1='GraphConv', conv1_kwargs=dict(), conv2='GraphConv',
-                 conv2_kwargs=dict(), conv3=None, conv3_kwargs=dict(),
-                 readout_op='mean'):
+    def __init__(self, n_var_feats=7, n_con_feats=4, n_soc_feats=6, n_h_feats=64,
+                 single_conv_for_both_passes=False, n_passes=1, conv1='SAGEConv',
+                 conv1_kwargs={'aggregator_type': 'pool'}, conv2='SAGEConv',
+                 conv2_kwargs={'aggregator_type': 'pool'}, conv3=None,
+                 conv3_kwargs=dict(), readout_op=None):
         super().__init__()
 
         self.n_passes = n_passes

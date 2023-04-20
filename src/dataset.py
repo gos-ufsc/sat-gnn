@@ -93,12 +93,32 @@ def make_graph_from_model(model):
     g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_weights)
     g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_weights)
 
-    g.nodes['con'].data['x'] = torch.from_numpy(np.stack(
-        (b, constraints_sense), -1
-    ))
+    g.nodes['con'].data['x'] = torch.from_numpy(np.stack((
+        b,  # rhs
+        A.mean(1),  # c_coeff
+        g.in_degrees(etype='v2c').numpy() + \
+        g.in_degrees(etype='s2c').numpy(),  # Nc_coeff
+        constraints_sense,  # sense
+    ), -1))
 
-    g.nodes['var'].data['x'] = torch.from_numpy(c[~soc_vars_mask])
-    g.nodes['soc'].data['x'] = torch.from_numpy(c[soc_vars_mask])
+    g.nodes['var'].data['x'] = torch.from_numpy(np.stack((
+        c[~soc_vars_mask],  # obj
+        A.mean(0)[~soc_vars_mask],  # v_coeff
+        g.in_degrees(etype='c2v').numpy(),  # Nv_coeff
+        A.max(0)[~soc_vars_mask],  # max_coeff
+        A.min(0)[~soc_vars_mask],  # min_coeff
+        np.ones_like(c[~soc_vars_mask]),  # int
+        np.array([float(v.rstrip(')').split(',')[-1]) / 97 for v in vars_names[:len(var_vars)]]),  # pos_emb (kind of)
+    ), -1))
+
+    g.nodes['soc'].data['x'] = torch.from_numpy(np.stack((
+        c[soc_vars_mask],  # obj
+        A.mean(0)[soc_vars_mask],  # v_coeff
+        g.in_degrees(etype='c2s').numpy(),  # Nv_coeff
+        A.max(0)[soc_vars_mask],  # max_coeff
+        A.min(0)[soc_vars_mask],  # min_coeff
+        np.zeros_like(c[soc_vars_mask]),  # int
+    ), -1))
 
     return g
 
