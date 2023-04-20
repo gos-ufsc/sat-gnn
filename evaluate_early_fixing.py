@@ -15,7 +15,8 @@ from src.utils import load_from_wandb
 
 def get_ef_performance(graph, model, net, timeout=60):
     vars_names = np.core.defchararray.array([v.getAttr(GRB.Attr.VarName) for v in model.getVars()])
-    vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
+    # vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
+    vars_names = vars_names[(vars_names.find('phi(') >= 0)]
 
     # baseline results
     model_ = model.copy()
@@ -28,6 +29,11 @@ def get_ef_performance(graph, model, net, timeout=60):
 
     with torch.no_grad():
         x_hat = torch.sigmoid(net(graph)).squeeze(0)
+    phi_filter = torch.ones_like(x_hat) == 0  # only False
+    phi_filter = phi_filter.view(-1, 2*97)
+    phi_filter[:,97:] = True
+    phi_filter = phi_filter.flatten()
+    x_hat = x_hat[phi_filter]
 
     most_certain_idx  = (x_hat - 0.5).abs().sort(descending=True).indices
 
@@ -35,7 +41,7 @@ def get_ef_performance(graph, model, net, timeout=60):
     objs = list()
     gaps = list()
     ns = list()
-    for n in [0, 50, 100, 150, 200, 300, 500, 1000, len(x_hat)]:
+    for n in [0, 50, 100, 150, 200, 300, 500, len(x_hat)]:
     # for n in [0, 50, 100, 150]:
         if n == 0:
             runtimes.append(baseline_runtime)
@@ -76,7 +82,7 @@ if __name__ == '__main__':
     assert len(wandb_run_id) == 8, 'a proper wandb run id was not provided'
 
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
-    instances_fpaths = list(instances_dir.glob('97_*.json'))
+    instances_fpaths = list(instances_dir.glob('97_9*.json'))
 
     net = InstanceGCN(1, readout_op=None)
     net = load_from_wandb(net, wandb_run_id, 'sat-gnn', 'model_last')

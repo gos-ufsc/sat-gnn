@@ -15,7 +15,7 @@ from src.utils import load_from_wandb
 
 def get_ht_performance(graph, model, net, timeout=60):
     vars_names = np.core.defchararray.array([v.getAttr(GRB.Attr.VarName) for v in model.getVars()])
-    vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
+    vars_names = vars_names[(vars_names.find('phi(') >= 0)]
 
     # baseline results
     model_ = model.copy()
@@ -28,6 +28,13 @@ def get_ht_performance(graph, model, net, timeout=60):
 
     with torch.no_grad():
         x_hat = torch.sigmoid(net(graph)).squeeze(0)
+    with torch.no_grad():
+        x_hat = torch.sigmoid(net(graph)).squeeze(0)
+    phi_filter = torch.ones_like(x_hat) == 0  # only False
+    phi_filter = phi_filter.view(-1, 2*97)
+    phi_filter[:,97:] = True
+    phi_filter = phi_filter.flatten()
+    x_hat = x_hat[phi_filter]
 
     most_certain_idx  = (x_hat - 0.5).abs().sort(descending=True).indices
 

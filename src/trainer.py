@@ -593,11 +593,26 @@ class EarlyFixingTrainer(Trainer):
         y = y.squeeze(0)
         w = w.squeeze(0)
 
-        loss_time, loss =  timeit(self._loss_func)(
-            output.repeat((y.shape[0],1)),
-            y[:,:output.shape[-1]]
-        )
-        loss = (w / w.max(-1).values) @ loss.sum(-1)
+        start = time()
+        y_hat = torch.sigmoid(output).repeat((y.shape[0],1))
+
+        #compute weight
+        exp_weight = torch.exp(-w / w.max())
+        weight = exp_weight/exp_weight.sum()
+
+        # cross-entropy
+        pos_loss = -(y_hat + 1e-8).log()*(y == 1)
+        neg_loss = -(1 - y_hat + 1e-8).log()*(y == 0)
+        sum_loss = pos_loss + neg_loss
+
+        loss = sum_loss.sum(-1) @ weight
+        loss_time = time() - start
+
+        # loss_time, loss =  timeit(self._loss_func)(
+        #     output.repeat((y.shape[0],1)),
+        #     y[:,:output.shape[-1]]
+        # )
+        # loss = (w / w.max(-1).values) @ loss.sum(-1)
 
         if validation:
             y_pred_ = (torch.sigmoid(output) > 0.5).squeeze(0).cpu().numpy().astype(int)
@@ -668,6 +683,55 @@ class EarlyFixingTrainer(Trainer):
         }
 
         return losses, times
+
+class PhiEarlyFixingTrainer(EarlyFixingTrainer):
+    def get_loss_and_metrics(self, output, y, w, validation=False):
+        # TODO: maybe rewrite things so that batch_size > 1 is possible
+        y = y.squeeze(0)
+        w = w.squeeze(0)
+
+        # get only phi variables
+        phi_filter = torch.ones_like(output.squeeze(0)) == 0  # only False
+        phi_filter = phi_filter.view(-1, 2*97)
+        phi_filter[:,97:] = True
+        phi_filter = phi_filter.flatten()
+
+        # start = time()
+        # y_hat = torch.sigmoid(output).repeat((y.shape[0],1))
+
+        #compute weight
+        # exp_weight = torch.exp(-w / w.max())
+        # weight = exp_weight/exp_weight.sum()
+        weight = torch.softmax(w / w.max(), -1)
+
+        # cross-entropy
+        # pos_loss = -(y_hat + 1e-8).log()*(y == 1)
+        # neg_loss = -(1 - y_hat + 1e-8).log()*(y == 0)
+        # sum_loss = pos_loss + neg_loss
+
+        # loss = sum_loss.sum(-1) @ weight
+        # loss_time = time() - start
+
+        loss_time, loss =  timeit(self._loss_func)(
+            output.repeat((y.shape[0],1))[...,phi_filter],
+            y[:,:output.shape[-1]][...,phi_filter]
+        )
+        loss = weight @ loss.sum(-1)
+
+        if validation:
+            y_pred_ = (torch.sigmoid(output) > 0.5).squeeze(0).cpu().numpy().astype(int)[...,phi_filter.cpu()]
+            y_ = (y.cpu().numpy()[:,:output.shape[-1]] > 0.5).astype(int)[...,phi_filter.cpu()]
+            hit = y_pred_.tolist() in y_.tolist()
+            if hit:
+                hit_i = y_.tolist().index(y_pred_.tolist())
+                gap = w.max() - w[hit_i]
+            else:
+                gap = -1
+            # here you can compute validation-specific metrics
+            return loss_time, loss, (hit, gap)
+        else:
+            return loss_time, loss
+
 
 class OnlyXEarlyFixingInstanceTrainer(EarlyFixingTrainer):
     def prepare_data(self):
