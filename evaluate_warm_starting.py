@@ -13,7 +13,7 @@ from src.net import InstanceGCN
 from src.utils import load_from_wandb
 
 
-def get_ef_performance(graph, model, net, timeout=60):
+def get_ws_performance(graph, model, net, timeout=60):
     vars_names = np.core.defchararray.array([v.getAttr(GRB.Attr.VarName) for v in model.getVars()])
     vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
 
@@ -35,7 +35,7 @@ def get_ef_performance(graph, model, net, timeout=60):
     objs = list()
     gaps = list()
     ns = list()
-    for n in [0, 50, 100, 150, 200, 300, 500, 1000, len(x_hat)]:
+    for n in [0, 50, 100, 200, 500, 1000, len(x_hat)]:
     # for n in [0, 50, 100, 150]:
         if n == 0:
             runtimes.append(baseline_runtime)
@@ -50,8 +50,7 @@ def get_ef_performance(graph, model, net, timeout=60):
         # fix variables
         model_ = model.copy()
         for fixed_var_name, fixed_var_X in zip(fixed_vars_names, fixed_x_hat):
-            model_.getVarByName(fixed_var_name).lb = fixed_var_X
-            model_.getVarByName(fixed_var_name).ub = fixed_var_X
+            model_.getVarByName(fixed_var_name).Start = fixed_var_X
 
         model_.setParam('TimeLimit', timeout)
         model_.update()
@@ -76,7 +75,7 @@ if __name__ == '__main__':
     assert len(wandb_run_id) == 8, 'a proper wandb run id was not provided'
 
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
-    instances_fpaths = list(instances_dir.glob('97_*.json'))
+    instances_fpaths = list(instances_dir.glob('97_9_*.json'))
 
     net = InstanceGCN(1, readout_op=None)
     net = load_from_wandb(net, wandb_run_id, 'sat-gnn', 'model_last')
@@ -92,13 +91,13 @@ if __name__ == '__main__':
         ts = {int(var.split(',')[1][:-1]) for var in x_vars}
         T, J = len(ts), len(js)
 
-        ns, runtimes, objs, gaps = get_ef_performance(graph, model, net, timeout=10)
+        ns, runtimes, objs, gaps = get_ws_performance(graph, model, net, timeout=10)
 
         performances.append(dict(
             T=T, J=J,
             ns=ns, runtimes=runtimes,
             objs=objs, gaps=gaps
         ))
-    
-    with open(f'ef_performance_{wandb_run_id}.pkl', 'wb') as f:
+
+    with open(f'ws_performance_{wandb_run_id}.pkl', 'wb') as f:
         pickle.dump(performances, f)
