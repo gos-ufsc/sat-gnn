@@ -112,17 +112,17 @@ class InstanceGCN(nn.Module):
         self.n_con_feats = n_con_feats
         self.n_soc_feats = n_soc_feats
 
-        self.soc_emb = torch.nn.Sequential(
-            torch.nn.Linear(n_soc_feats, n_h_feats),
-            torch.nn.ReLU(),
+        self.soc_emb = nn.Sequential(
+            nn.Linear(n_soc_feats, n_h_feats),
+            nn.ReLU(),
         ).double()
-        self.var_emb = torch.nn.Sequential(
-            torch.nn.Linear(n_var_feats, n_h_feats),
-            torch.nn.ReLU(),
+        self.var_emb = nn.Sequential(
+            nn.Linear(n_var_feats, n_h_feats),
+            nn.ReLU(),
         ).double()
-        self.con_emb = torch.nn.Sequential(
-            torch.nn.Linear(n_con_feats, n_h_feats),
-            torch.nn.ReLU(),
+        self.con_emb = nn.Sequential(
+            nn.Linear(n_con_feats, n_h_feats),
+            nn.ReLU(),
         ).double()
 
         self.convs = list()
@@ -212,19 +212,19 @@ class InstanceGCN(nn.Module):
 
         self.convs = nn.Sequential(*self.convs)
 
-        self.output = torch.nn.Sequential(
-            torch.nn.Linear(n_h_feats, n_h_feats),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_h_feats, n_h_feats),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_h_feats, 1),
+        self.output = nn.Sequential(
+            nn.Linear(n_h_feats, n_h_feats),
+            nn.ReLU(),
+            nn.Linear(n_h_feats, n_h_feats),
+            nn.ReLU(),
+            nn.Linear(n_h_feats, 1),
         ).double()
 
         self.readout_op = readout_op
 
         # downscale all weights
         def downscale_weights(module):
-            if isinstance(module, torch.nn.Linear):
+            if isinstance(module, nn.Linear):
                 module.weight.data /= 10
         self.apply(downscale_weights)
 
@@ -270,6 +270,68 @@ class InstanceGCN(nn.Module):
 
         # per-node logits
         g.nodes['var'].data['logit'] = self.output(h_var)
+
+        if self.readout_op is not None:
+            return dgl.readout_nodes(g, 'logit', op=self.readout_op, ntype='var')
+        else:
+            return torch.stack([g_.nodes['var'].data['logit'] for g_ in dgl.unbatch(g)]).squeeze(-1)
+
+class AttentionInstanceGCN(InstanceGCN):
+    def __init__(self, n_var_feats=7, n_con_feats=4, n_soc_feats=6, n_h_feats=64, single_conv_for_both_passes=False, n_passes=1, conv1='SAGEConv', conv1_kwargs={ 'aggregator_type': 'pool' }, conv2='SAGEConv', conv2_kwargs={ 'aggregator_type': 'pool' }, conv3=None, conv3_kwargs=dict(), readout_op=None):
+        super().__init__(n_var_feats, n_con_feats, n_soc_feats, n_h_feats, single_conv_for_both_passes, n_passes, conv1, conv1_kwargs, conv2, conv2_kwargs, conv3, conv3_kwargs, readout_op)
+
+        self.in_att = nn.Sequential(
+            nn.Linear(self.n_h_feats, self.n_h_feats),
+            nn.ReLU(),
+            nn.Linear(self.n_h_feats, self.n_h_feats),
+            nn.Softmax(-1),
+        )
+
+    def forward(self, g):
+        var_features = g.nodes['var'].data['x'].view(-1,self.n_var_feats)
+        soc_features = g.nodes['soc'].data['x'].view(-1,self.n_soc_feats)
+        con_features = g.nodes['con'].data['x'].view(-1,self.n_con_feats)
+
+        # edges = ['v2c', 'c2v', 's2c', 'c2s']
+        # edge_weights = dict()
+        # for e in edges:
+        #     edge_weights[e] = (g.edges[e].data['A'].unsqueeze(-1),)
+        edge_weights = g.edata['A']
+
+        # embbed features
+        h_var = self.var_emb(var_features)
+        h_soc = self.soc_emb(soc_features)
+        h_con = self.con_emb(con_features)
+
+        var_att = self.in_att(h_var)
+
+        for _ in range(self.n_passes):
+            # var -> con
+            for conv in self.convs:
+                # TODO: figure out a way to avoid applying the convs to the
+                # whole graph, i.e., to ignore 'c2v' edges, for example, in
+                # this pass.
+                h_con = conv(g, {'con': h_con, 'var': h_var, 'soc': h_soc},
+                            #  mod_args=edge_weights)['con']
+                            #  mod_args={edge_weights_key: edge_weights})['con']
+                             mod_kwargs={'edge_weights': edge_weights,
+                                         'efeats': edge_weights})['con']
+                h_con = F.relu(h_con)
+
+            # con -> var
+            for conv in self.convs:
+                edge_weights_key = 'edge_weights' if not isinstance(conv.mods.v2c, EGATConv) else 'efeats'
+                hs = conv(g, {'con': h_con, 'var': h_var, 'soc': h_soc},
+                        #   mod_args=edge_weights)
+                        #   mod_args={edge_weights_key: edge_weights})
+                          mod_kwargs={'edge_weights': edge_weights,
+                                      'efeats': edge_weights})
+                h_var = F.relu(hs['var'])
+                h_soc = F.relu(hs['soc'])
+
+        # per-node logits
+        g.nodes['var'].data['logit'] = self.output(h_var * var_att)
+        # g.nodes['var'].data['logit'] = torch.bmm(var_att.unsqueeze(1), h_var.unsqueeze(2)).squeeze(2)
 
         if self.readout_op is not None:
             return dgl.readout_nodes(g, 'logit', op=self.readout_op, ntype='var')
