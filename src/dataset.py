@@ -122,7 +122,7 @@ def make_graph_from_model(model):
 
     return g
 
-class InstanceDataset(DGLDataset):
+class MultiTargetDataset(DGLDataset):
     def __init__(self, instances_fpaths, sols_dir='/home/bruno/sat-gnn/data/interim',
                  name='Optimality of Dimensions - Instance', split='train',
                  return_model=False, **kwargs):
@@ -183,3 +183,65 @@ class InstanceDataset(DGLDataset):
             return g, ys, m
         except AttributeError:
             return g, ys
+
+class OptimalsDataset(DGLDataset):
+    def __init__(self, instances_fpaths, sols_dir='/home/bruno/sat-gnn/data/interim',
+                 name='Optimality of Dimensions - Instance', split='train',
+                 return_model=False, **kwargs):
+        super().__init__(name, **kwargs)
+
+        sols_dir = Path(sols_dir)
+        assert sols_dir.exists()
+
+        i_range = torch.arange(150)
+        if split.lower() == 'train':
+            i_range = i_range[:60]
+        elif split.lower() == 'val':
+            i_range = i_range[60:80]
+        elif split.lower() == 'test':
+            i_range = i_range[80:]
+
+        models = list()
+        self.targets = list()
+        self.gs = list()
+        for instance_fp in instances_fpaths:
+            i = int(instance_fp.name[:-len('.json')].split('_')[-1])
+            if i not in i_range:  # instance is not part of the split
+                continue
+
+            with open(instance_fp) as f:
+                instance = json.load(f)
+
+            sol_fp = sols_dir/instance_fp.name.replace('.json', '_opt.npz')
+            if not sol_fp.exists():
+                print('optimum was not computed for ', instance_fp)
+                continue
+            sol_npz = np.load(sol_fp)
+            obj, gap, runtime, sol = sol_npz['arr_0'], sol_npz['arr_1'], sol_npz['arr_2'], sol_npz['arr_3']
+
+            m = get_model(instance, coupling=True, new_ineq=False)
+
+            self.gs.append(make_graph_from_model(m))
+            self.targets.append(sol)
+
+            models.append(m)
+
+        if return_model:
+            self.models = models
+        else:
+            del models
+
+    def __len__(self):
+        return len(self.gs)
+
+    def __getitem__(self, idx):
+        # g = deepcopy(self.gs[idx])
+        g = self.gs[idx]
+
+        y = self.targets[idx]
+
+        try:
+            m = self.models[idx]
+            return g, y, m
+        except AttributeError:
+            return g, y
