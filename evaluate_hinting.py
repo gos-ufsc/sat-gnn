@@ -8,7 +8,7 @@ from tqdm import tqdm
 import numpy as np
 import torch
 
-from src.dataset import InstanceDataset
+from src.dataset import MultiTargetDataset
 from src.net import InstanceGCN
 from src.utils import load_from_wandb
 
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     net = load_from_wandb(net, wandb_run_id, 'sat-gnn', 'model_last')
     net.eval()
 
-    ds = InstanceDataset(instances_fpaths, split='val', return_model=True)
+    ds = MultiTargetDataset(instances_fpaths, split='val', return_model=True)
 
     performances = list()
     for graph, _, model in tqdm(ds):

@@ -8,18 +8,20 @@ from tqdm import tqdm
 import numpy as np
 import torch
 
-from src.dataset import InstanceDataset
+from src.dataset import MultiTargetDataset
 from src.net import InstanceGCN
 from src.utils import load_from_wandb
 
 
 def get_ws_performance(graph, model, net, timeout=60):
     vars_names = np.core.defchararray.array([v.getAttr(GRB.Attr.VarName) for v in model.getVars()])
-    vars_names = vars_names[(vars_names.find('phi(') >= 0)]
+    vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
 
     # baseline results
     model_ = model.copy()
-    model_.setParam('TimeLimit', timeout)
+    model_.Params.TimeLimit = timeout
+    # model_.Params.Heuristics = 0
+    # model_.Params.Presolve = 0
     model_.update()
     model_.optimize()
     baseline_runtime = model_.Runtime
@@ -28,11 +30,11 @@ def get_ws_performance(graph, model, net, timeout=60):
 
     with torch.no_grad():
         x_hat = torch.sigmoid(net(graph)).squeeze(0)
-    phi_filter = torch.ones_like(x_hat) == 0  # only False
-    phi_filter = phi_filter.view(-1, 2*97)
-    phi_filter[:,97:] = True
-    phi_filter = phi_filter.flatten()
-    x_hat = x_hat[phi_filter]
+    # phi_filter = torch.ones_like(x_hat) == 0  # only False
+    # phi_filter = phi_filter.view(-1, 2*97)
+    # phi_filter[:,97:] = True
+    # phi_filter = phi_filter.flatten()
+    # x_hat = x_hat[phi_filter]
 
     most_certain_idx  = (x_hat - 0.5).abs().sort(descending=True).indices
 
@@ -57,7 +59,9 @@ def get_ws_performance(graph, model, net, timeout=60):
         for fixed_var_name, fixed_var_X in zip(fixed_vars_names, fixed_x_hat):
             model_.getVarByName(fixed_var_name).Start = fixed_var_X
 
-        model_.setParam('TimeLimit', timeout)
+        model_.Params.TimeLimit = timeout
+        # model_.Params.Heuristics = 0
+        # model_.Params.Presolve = 0
         model_.update()
         model_.optimize()
 
@@ -82,11 +86,11 @@ if __name__ == '__main__':
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
     instances_fpaths = list(instances_dir.glob('97_9_*.json'))
 
-    net = InstanceGCN(1, readout_op=None)
+    net = InstanceGCN(readout_op=None)
     net = load_from_wandb(net, wandb_run_id, 'sat-gnn', 'model_last')
     net.eval()
 
-    ds = InstanceDataset(instances_fpaths, split='val', return_model=True)
+    ds = MultiTargetDataset(instances_fpaths, split='val', return_model=True)
 
     performances = list()
     for graph, _, model in tqdm(ds):
