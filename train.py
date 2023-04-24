@@ -4,8 +4,8 @@ import numpy as np
 import torch
 import torch.nn
 
-from src.net import InstanceGCN
-from src.trainer import EarlyFixingTrainer, PhiEarlyFixingTrainer
+from src.net import AttentionInstanceGCN, InstanceGCN
+from src.trainer import MultiTargetTrainer, OptimalsTrainer, PhiMultiTargetTrainer
 from src.utils import debugger_is_active
 
 
@@ -30,21 +30,13 @@ if __name__ == '__main__':
     # Early fixing the solution to all jobs, including coupling constraints
     for _ in range(1):
         net = InstanceGCN(
-            conv1='SAGEConv',
-            conv1_kwargs={'aggregator_type': 'pool'},
-            # conv2=None,
-            conv2='SAGEConv',
-            conv2_kwargs={'aggregator_type': 'pool'},
-            # conv3='SAGEConv',
-            # conv3_kwargs={'aggregator_type': 'pool'},
             n_h_feats=64,
-            n_passes=1,
             readout_op=None,
         )
 
         instances_fpaths = list(Path('data/raw/').glob('97_9*.json'))
 
-        PhiEarlyFixingTrainer(
+        MultiTargetTrainer(
             net.double(),
             instances_fpaths=instances_fpaths,
             sols_dir='/home/bruno/sat-gnn/data/interim',
@@ -55,19 +47,13 @@ if __name__ == '__main__':
             device=device,
         ).run()
 
-    # # Early fixing the solution to all jobs, including coupling constraints
-    # instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
-    # # instances_fpaths = sorted(instances_fpaths)
-    # with open('97_9_opts.pkl', 'rb') as f:
-    #     opts = pickle.load(f)
-    # OnlyXEarlyFixingInstanceTrainer(
-    #     InstanceGCN(2, readout_op=None),
-    #     instances_fpaths=instances_fpaths,
-    #     optimals=opts,
-    #     batch_size=2**4,
-    #     epochs=100,
-    #     wandb_project=wandb_project,
-    #     wandb_group='OnlyX-EarlyFixingInstance-test',
-    #     random_seed=seed,
-    #     device=device,
-    # ).run()
+        # OptimalsTrainer(
+        #     net.double(),
+        #     instances_fpaths=instances_fpaths,
+        #     sols_dir='/home/bruno/sat-gnn/data/interim',
+        #     epochs=100,
+        #     wandb_project=wandb_project,
+        #     wandb_group='Optimals',
+        #     random_seed=seed,
+        #     device=device,
+        # ).run()
