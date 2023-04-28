@@ -128,8 +128,11 @@ class MultiTargetDataset(DGLDataset):
                  return_model=False, **kwargs):
         super().__init__(name, **kwargs)
 
-        sols_dir = Path(sols_dir)
-        assert sols_dir.exists()
+        self.instances_fpaths = instances_fpaths
+        self.sols_dir = Path(sols_dir)
+        assert self.sols_dir.exists()
+
+        self.return_model = return_model
 
         i_range = torch.arange(150)
         if split.lower() == 'train':
@@ -138,11 +141,13 @@ class MultiTargetDataset(DGLDataset):
             i_range = i_range[60:80]
         elif split.lower() == 'test':
             i_range = i_range[80:]
+        elif split.lower() == 'all':
+            pass
 
         models = list()
         self.targets = list()
         self.gs = list()
-        for instance_fp in instances_fpaths:
+        for instance_fp in self.instances_fpaths:
             i = int(instance_fp.name[:-len('.json')].split('_')[-1])
             if i not in i_range:  # instance is not part of the split
                 continue
@@ -150,7 +155,7 @@ class MultiTargetDataset(DGLDataset):
             with open(instance_fp) as f:
                 instance = json.load(f)
 
-            sol_fp = sols_dir/instance_fp.name.replace('.json', '_sols.npz')
+            sol_fp = self.sols_dir/instance_fp.name.replace('.json', '_sols.npz')
             if not sol_fp.exists():
                 print('solutions were not computed for ', instance_fp)
                 continue
@@ -164,7 +169,7 @@ class MultiTargetDataset(DGLDataset):
 
             models.append(get_model_scip(instance, coupling=True, new_ineq=False))
         
-        if return_model:
+        if self.return_model:
             self.models = models
         else:
             del models
@@ -184,14 +189,21 @@ class MultiTargetDataset(DGLDataset):
         except AttributeError:
             return g, ys
 
+    def get_split(self, split):
+        return MultiTargetDataset(self.instances_fpaths, self.sols_dir,
+                                  self.name, split, self.return_model)
+
 class OptimalsDataset(DGLDataset):
     def __init__(self, instances_fpaths, sols_dir='/home/bruno/sat-gnn/data/interim',
                  name='Optimality of Dimensions - Instance', split='train',
                  return_model=False, **kwargs):
         super().__init__(name, **kwargs)
 
-        sols_dir = Path(sols_dir)
-        assert sols_dir.exists()
+        self.instances_fpaths = instances_fpaths
+        self.sols_dir = Path(sols_dir)
+        assert self.sols_dir.exists()
+
+        self.return_model = return_model
 
         i_range = torch.arange(150)
         if split.lower() == 'train':
@@ -204,7 +216,7 @@ class OptimalsDataset(DGLDataset):
         models = list()
         self.targets = list()
         self.gs = list()
-        for instance_fp in instances_fpaths:
+        for instance_fp in self.instances_fpaths:
             i = int(instance_fp.name[:-len('.json')].split('_')[-1])
             if i not in i_range:  # instance is not part of the split
                 continue
@@ -212,7 +224,7 @@ class OptimalsDataset(DGLDataset):
             with open(instance_fp) as f:
                 instance = json.load(f)
 
-            sol_fp = sols_dir/instance_fp.name.replace('.json', '_opt.npz')
+            sol_fp = self.sols_dir/instance_fp.name.replace('.json', '_opt.npz')
             if not sol_fp.exists():
                 print('optimum was not computed for ', instance_fp)
                 continue
@@ -226,7 +238,7 @@ class OptimalsDataset(DGLDataset):
 
             models.append(m)
 
-        if return_model:
+        if self.return_model:
             self.models = models
         else:
             del models
@@ -245,6 +257,10 @@ class OptimalsDataset(DGLDataset):
             return g, y, m
         except AttributeError:
             return g, y
+
+    def get_split(self, split):
+        return OptimalsDataset(self.instances_fpaths, self.sols_dir, self.name,
+                               split, self.return_model)
 
 class VarOptimalityDataset(OptimalsDataset):
     def __init__(self, instances_fpaths, sols_dir='/home/bruno/sat-gnn/data/interim',
@@ -281,3 +297,8 @@ class VarOptimalityDataset(OptimalsDataset):
             return g, y, m
         except AttributeError:
             return g, y
+
+    def get_split(self, split):
+        return VarOptimalityDataset(self.instances_fpaths, self.sols_dir,
+                                    self.name, split, self.samples_per_instance,
+                                    self.return_model)
