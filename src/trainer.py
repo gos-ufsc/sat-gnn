@@ -14,6 +14,9 @@ import torch.nn as nn
 import wandb
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.sampler import SubsetRandomSampler
+from torch.utils.data import DataLoader, Dataset
+from dgl.dataloading import GraphDataLoader
+from src.net import VarInstanceGCN
 
 from src.problem import get_soc
 from src.dataset import MultiTargetDataset, OptimalsDataset, VarOptimalityDataset
@@ -38,16 +41,14 @@ class Trainer(ABC):
         random_seed: if not None (default = 42), fixes randomness for Python,
         NumPy as PyTorch (makes trainig reproducible).
     """
-    def __init__(self, net: nn.Module, epochs=5, lr= 0.1,
-                 optimizer: str = 'Adam', optimizer_params: dict = None,
-                 loss_func: str = 'MSELoss', lr_scheduler: str = None,
-                 lr_scheduler_params: dict = None, mixed_precision=True,
-                 device=None, wandb_project=None, wandb_group=None,
-                 logger=None, checkpoint_every=50, random_seed=42,
-                 max_loss=None, timeout=np.inf) -> None:
+    def __init__(self, net: nn.Module, dataset: Dataset, epochs=5, lr= 0.1,
+                 batch_size=2**4, optimizer: str = 'Adam',
+                 optimizer_params=dict(), loss_func: str = 'MSELoss',
+                 loss_func_params=dict(), lr_scheduler: str = None,
+                 lr_scheduler_params=dict(), mixed_precision=True,
+                 device=None, wandb_project=None, wandb_group=None, logger=None,
+                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
         self._is_initalized = False
-
-        self.timeout = timeout
 
         if device is None:
             self.device = torch.device(
@@ -60,11 +61,14 @@ class Trainer(ABC):
 
         self.epochs = epochs
         self.lr = lr
+        self.batch_size = batch_size
 
         self.net = net.to(self.device)
+        self.dataset = dataset
         self.optimizer = optimizer
         self.optimizer_params = optimizer_params
         self.loss_func = loss_func
+        self.loss_func_params = loss_func_params
         self.lr_scheduler = lr_scheduler
         self.lr_scheduler_params = lr_scheduler_params
 
@@ -94,9 +98,26 @@ class Trainer(ABC):
 
         self.max_loss = max_loss
 
-        self._val_score_label = 'all'
-        self._val_score_high_is_good = False
-        self._val_score_window_size = 5
+    def _load_optim(self, state_dict=None):
+        Optimizer = eval(f"torch.optim.{self.optimizer}")
+        self._optim = Optimizer(
+            filter(lambda p: p.requires_grad, self.net.parameters()),
+            lr=self.lr,
+            **self.optimizer_params
+        )
+        if state_dict is not None:
+            self._optim.load_state_dict(state_dict)
+    
+    def _load_lr_scheduler(self, state_dict=None):
+        Scheduler = eval(f"torch.optim.lr_scheduler.{self.lr_scheduler}")
+        self._scheduler = Scheduler(self._optim, **self.lr_scheduler_params)
+
+        if state_dict is not None:
+            self._scheduler.load_state_dict(state_dict)
+
+    def _load_loss_func(self):
+        LossClass = eval(f"nn.{self.loss_func}")
+        self._loss_func = LossClass(**self.loss_func_params)
 
     @classmethod
     def load_trainer(cls, net: nn.Module, run_id: str, wandb_project=None,
@@ -152,22 +173,13 @@ class Trainer(ABC):
         self.l.info(f'Resuming training of {wandb.run.name} at epoch {self._e}')
 
         # load optimizer
-        Optimizer = eval(f"torch.optim.{self.optimizer}")
-        self._optim = Optimizer(
-            filter(lambda p: p.requires_grad, self.net.parameters()),
-            lr=self.lr,
-            **self.optimizer_params
-        )
-        self._optim.load_state_dict(checkpoint['optimizer_state_dict'])
+        self._load_optim(checkpoint['optimizer_state_dict'])
 
         # load scheduler
         if self.lr_scheduler is not None:
-            Scheduler = eval(f"torch.optim.lr_scheduler.{self.lr_scheduler}")
-            self._scheduler = Scheduler(self._optim, **self.lr_scheduler_params)
-            self._scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            self._load_lr_scheduler(state_dict=checkpoint['scheduler_state_dict'])
 
-        LossClass = eval(f"nn.{self.loss_func}")
-        self.load_loss_func(self, LossClass)
+        self._load_loss_func(self)
 
         if self.mixed_precision:
             self._scaler = GradScaler()
@@ -175,19 +187,19 @@ class Trainer(ABC):
         else:
             self.autocast_if_mp = nullcontext
 
-        self.prepare_data()
+        self.train_data, self.val_data = self.prepare_data()
 
         self._is_initalized = True
 
         return self
 
-    def load_loss_func(self, LossClass):
-        self._loss_func = LossClass()
-
     def setup_training(self):
         self.l.info('Setting up training')
 
-        self._load_optim()
+        self._load_optim(state_dict=None)
+
+        if self.lr_scheduler is not None:
+            self._load_lr_scheduler(state_dict=None)
 
         if self._log_to_wandb:
             self._add_to_wandb_config({
@@ -206,8 +218,7 @@ class Trainer(ABC):
             self.l.info('Initializing wandb.')
             self.initialize_wandb()
 
-        LossClass = eval(f"nn.{self.loss_func}")
-        self.load_loss_func(LossClass)
+        self._load_loss_func()
 
         if self.mixed_precision:
             self._scaler = GradScaler()
@@ -216,20 +227,9 @@ class Trainer(ABC):
             self.autocast_if_mp = nullcontext
 
         self.l.info('Preparing data')
-        self.prepare_data()
+        self.train_data, self.val_data = self.prepare_data()
 
         self._is_initalized = True
-
-    def _load_optim(self):
-        Optimizer = eval(f"torch.optim.{self.optimizer}")
-        self._optim = Optimizer(
-            filter(lambda p: p.requires_grad, self.net.parameters()),
-            lr=self.lr
-        )
-
-        if self.lr_scheduler is not None:
-            Scheduler = eval(f"torch.optim.lr_scheduler.{self.lr_scheduler}")
-            self._scheduler = Scheduler(self._optim, **self.lr_scheduler_params)
 
     def _add_to_wandb_config(self, d: dict):
         if not hasattr(self, '_wandb_config'):
@@ -252,12 +252,23 @@ class Trainer(ABC):
 
         self.l.info(f"Wandb set up. Run ID: {self._id}")
 
-    @abstractmethod
     def prepare_data(self):
-        """Must populate `self.data` and `self.val_data`.
+        """Splits dataset into training and validation data. Instantiate loaders.
         """
-        # TODO: maybe I should refactor this so that the Dataset is an input to
-        # the Trainer?
+        generator = torch.Generator().manual_seed(33)
+
+        train_size = int(0.8 * len(self.dataset))
+        val_size = len(self.dataset) - train_size
+        train_data, val_data = torch.utils.data.random_split(
+            self.dataset,
+            (train_size, val_size),
+            generator=generator
+        )
+
+        train_loader = DataLoader(train_data, self.batch_size, shuffle=True)
+        val_loader = DataLoader(val_data, self.batch_size, shuffle=False)
+
+        return train_loader, val_loader
 
     @staticmethod
     def _add_data_to_log(data: dict, prefix: str, data_to_log=dict()):
@@ -291,7 +302,7 @@ class Trainer(ABC):
         self._add_data_to_log(train_times, 'train_time_', data_to_log)
         self._add_data_to_log(val_times, 'val_time_', data_to_log)
 
-        val_score = val_losses[self._val_score_label]  # defines best model
+        val_score = val_losses['all']  # defines best model
 
         return data_to_log, val_score
 
@@ -299,23 +310,11 @@ class Trainer(ABC):
         if not self._is_initalized:
             self.setup_training()
 
-        self.val_scores = list()
-
-        start = time()
         while self._e < self.epochs:
             self.l.info(f"Epoch {self._e} started ({self._e+1}/{self.epochs})")
             epoch_start_time = time()
 
             data_to_log, val_score = self._run_epoch()
-
-            self.val_scores.append(val_score)
-
-            # average validation score over the past
-            # `self._val_score_window_size` epochs
-            score_window = min(self._val_score_window_size, len(self.val_scores))
-            val_score = np.mean(self.val_scores[-score_window:])
-            if self._val_score_high_is_good:
-                val_score *= -1
 
             if self._log_to_wandb:
                 wandb.log(data_to_log, step=self._e, commit=True)
@@ -341,9 +340,6 @@ class Trainer(ABC):
                 if val_score > self.max_loss:
                     break
 
-            if time() - start > self.timeout:
-                break
-
             self._e += 1
 
         if self._log_to_wandb:
@@ -356,61 +352,27 @@ class Trainer(ABC):
 
         return self.net
 
-    def train_pass(self):
-        train_loss = 0
-        train_size = 0
+    def optim_step(self, loss):
+        if self.mixed_precision:
+            backward_time, _  = timeit(self._scaler.scale(loss).backward)()
+            self._scaler.step(self._optim)
+            self._scaler.update()
+        else:
+            backward_time, _  = timeit(loss.backward)()
+            self._optim.step()
 
-        forward_time = 0
-        loss_time = 0
-        backward_time = 0
-
-        self.net.train()
-        with torch.set_grad_enabled(True):
-            for X, y in self.data:
-                X = X.to(self.device)
-                y = y.to(self.device)
-
-                self._optim.zero_grad()
-
-                with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(X)
-                    forward_time += forward_time_
-
-                    loss_time_, loss = self.get_loss_and_metrics(y_hat, y)
-                    loss_time += loss_time_
-
-                if self.mixed_precision:
-                    backward_time_, _  = timeit(self._scaler.scale(loss).backward)()
-                    self._scaler.step(self._optim)
-                    self._scaler.update()
-                else:
-                    backward_time_, _  = timeit(loss.backward)()
-                    self._optim.step()
-                backward_time += backward_time_
-
-                train_loss += loss.item() * len(y)
-                train_size += len(y)
-
-            if self.lr_scheduler is not None:
-                self._scheduler.step()
-
-        losses = self.aggregate_loss_and_metrics(train_loss, train_size)
-        times = {
-            'forward': forward_time,
-            'loss': loss_time,
-            'backward': backward_time,
-        }
-
-        return losses, times
+        self._optim.zero_grad()
+        return backward_time
     
     def get_loss_and_metrics(self, y_hat, y, validation=False):
-        loss_time, loss =  timeit(self._loss_func)(y_hat, y)
+        loss_time, loss =  timeit(self._loss_func)(y_hat.view_as(y), y)
 
+        metrics = None
         if validation:
-            # here you can compute performance metrics
-            return loss_time, loss, None
-        else:
-            return loss_time, loss
+            # here you can compute performance metrics (populate `metrics`)
+            pass
+
+        return loss_time, loss, metrics
     
     def aggregate_loss_and_metrics(self, loss, size, metrics=None):
         # scale to data size
@@ -424,45 +386,61 @@ class Trainer(ABC):
 
         return losses
 
-    def validation_pass(self):
-        val_loss = 0
-        val_size = 0
-        val_metrics = list()
+    def data_pass(self, data, train=False):
+        loss = 0
+        size = 0
+        metrics = list()
 
         forward_time = 0
         loss_time = 0
+        backward_time = 0
 
-        self.net.eval()
-        with torch.set_grad_enabled(False):
-            for X, y in self.val_data:
+        self.net.train()
+        with torch.set_grad_enabled(train):
+            for X, y in data:
                 X = X.to(self.device)
                 y = y.to(self.device)
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(X)
-                    forward_time += forward_time_
+                    batch_forward_time, y_hat = timeit(self.net)(X)
+                    forward_time += batch_forward_time
 
-                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, y, validation=True)
-                    loss_time += loss_time_
+                    batch_loss_time, batch_loss, batch_metrics = self.get_loss_and_metrics(y_hat, y, validation=not train)
+                loss_time += batch_loss_time
 
-                    val_metrics.append(metrics)
+                metrics.append(batch_metrics)
 
-                val_loss += loss.item() * len(y)  # scales to data size
-                val_size += len(y)
+                if train:
+                    batch_backward_time = self.optim_step(batch_loss)
+                    backward_time += batch_backward_time
 
-        losses = self.aggregate_loss_and_metrics(val_loss, val_size, val_metrics)
+                loss += batch_loss.item() * len(y)
+                size += len(y)
+
+            if self.lr_scheduler is not None:
+                self._scheduler.step()
+
+        if all([b_m is None for b_m in metrics]):
+            metrics = None
+
+        losses = self.aggregate_loss_and_metrics(loss, size, metrics)
         times = {
             'forward': forward_time,
             'loss': loss_time,
+            'backward': backward_time,
         }
 
         return losses, times
 
-    def save_checkpoint(self):
-        best_val = self.best_val
-        if self._val_score_high_is_good:
-            best_val *= -1
+    def train_pass(self):
+        self.net.train()
+        return self.data_pass(self.train_data, train=True)
 
+    def validation_pass(self):
+        self.net.eval()
+        return self.data_pass(self.val_data, train=False)
+
+    def save_checkpoint(self):
         checkpoint = {
             'epoch': self._e,
             'best_val': self.best_val,
@@ -486,100 +464,77 @@ class Trainer(ABC):
         return fpath
 
 class MultiTargetTrainer(Trainer):
-    def __init__(self, net: nn.Module, instances_fpaths: List[Path],
-                 sols_dir='/home/bruno/sat-gnn/data/interim', epochs=5, lr=0.001,
-                 optimizer: str = 'Adam', optimizer_params: dict = None,
-                 loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
-                 lr_scheduler_params: dict = None, mixed_precision=False,
-                 device=None, wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None, timeout=np.inf) -> None:
-        super().__init__(
-            net, epochs, lr, optimizer, optimizer_params, loss_func,
-            lr_scheduler, lr_scheduler_params, mixed_precision, device,
-            wandb_project, wandb_group, logger, checkpoint_every, random_seed,
-            max_loss, timeout,
-        )
-
-        self.sols_dir = sols_dir
-
-        self.instances_fpaths = [Path(i) for i in instances_fpaths]
+    def __init__(self, net: nn.Module, dataset: Dataset, epochs=5, lr=0.001,
+                 optimizer: str = 'Adam', optimizer_params=dict(),
+                 loss_func: str = 'BCEWithLogitsLoss',
+                 loss_func_params={'reduction': 'none'}, lr_scheduler: str = None,
+                 lr_scheduler_params=dict(), mixed_precision=True, device=None,
+                 wandb_project=None, wandb_group=None, logger=None,
+                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        batch_size = 1
+        super().__init__(net, dataset, epochs, lr, batch_size, optimizer,
+                         optimizer_params, loss_func, loss_func_params,
+                         lr_scheduler, lr_scheduler_params, mixed_precision,
+                         device, wandb_project, wandb_group, logger,
+                         checkpoint_every, random_seed, max_loss)
 
         self._add_to_wandb_config({
-            "instances": [i.name for i in instances_fpaths],
             "n_passes": self.net.n_passes,
             "n_h_feats": self.net.n_h_feats,
             "single_conv": self.net.single_conv_for_both_passes,
             "n_convs": len(self.net.convs),
         })
 
-        self._val_score_label = 'accuracy'
-        self._val_score_high_is_good = True
-
-    def load_loss_func(self, LossClass):
-        self._loss_func = LossClass(reduction='none')
-
     def prepare_data(self):
-        train_data = MultiTargetDataset(
-            self.instances_fpaths,
-            sols_dir=self.sols_dir,
-            split='train',
-        )
-        val_data = MultiTargetDataset(
-            self.instances_fpaths,
-            sols_dir=self.sols_dir,
-            split='val',
-        )
+        train_data = self.dataset.get_split('train')
+        val_data = self.dataset.get_split('val')
 
-        self.data = dgl.dataloading.GraphDataLoader(
-            train_data,
-            shuffle=True,
-            batch_size=1,
-        )
-        self.val_data = dgl.dataloading.GraphDataLoader(
-            val_data,
-            batch_size=1,
-        )
+        train_loader = GraphDataLoader(train_data, batch_size=self.batch_size,
+                                       shuffle=True)
+        val_loader = GraphDataLoader(val_data, batch_size=self.batch_size,
+                                     shuffle=False)
 
-    def train_pass(self):
-        train_loss = 0
-        train_size = 0
+        return train_loader, val_loader
+
+    def data_pass(self, data, train=False):
+        loss = 0
+        size = 0
+        metrics = list()
 
         forward_time = 0
         loss_time = 0
         backward_time = 0
 
         self.net.train()
-        with torch.set_grad_enabled(True):
-            for g, (y, w) in self.data:
+        with torch.set_grad_enabled(train):
+            for g, (y, w) in data:
                 g = g.to(self.device)
                 y = y.to(self.device)
                 w = w.to(self.device)
 
-                self._optim.zero_grad()
-
                 with self.autocast_if_mp():
-                    forward_time_, output = timeit(self.net)(g)
-                    forward_time += forward_time_
+                    batch_forward_time, output = timeit(self.net)(g)
+                    forward_time += batch_forward_time
 
-                    loss_time_, loss = self.get_loss_and_metrics(output, y, w)
-                    loss_time += loss_time_
+                    batch_loss_time, batch_loss, batch_metrics = self.get_loss_and_metrics(output, y, w, validation=not train)
+                loss_time += batch_loss_time
 
-                if self.mixed_precision:
-                    backward_time_, _  = timeit(self._scaler.scale(loss).backward)()
-                    self._scaler.step(self._optim)
-                    self._scaler.update()
-                else:
-                    backward_time_, _  = timeit(loss.backward)()
-                    self._optim.step()
-                backward_time += backward_time_
+                metrics.append(batch_metrics)
 
-                train_loss += loss.item() * len(y)
-                train_size += len(y)
+                if train:
+                    batch_backward_time = self.optim_step(batch_loss)
+                    backward_time += batch_backward_time
+
+                loss += batch_loss.item() * len(y)
+                size += len(y)
 
             if self.lr_scheduler is not None:
                 self._scheduler.step()
 
-        losses = self.aggregate_loss_and_metrics(train_loss, train_size)
+        if all([b_m is None for b_m in metrics]):
+            metrics = None
+
+        losses = self.aggregate_loss_and_metrics(loss, size, metrics)
         times = {
             'forward': forward_time,
             'loss': loss_time,
@@ -602,6 +557,7 @@ class MultiTargetTrainer(Trainer):
         )
         loss = weight @ loss.sum(-1)
 
+        metrics = None
         if validation:
             y_pred_ = (torch.sigmoid(output) > 0.5).squeeze(0).cpu().numpy().astype(int)
             y_ = (y.cpu().numpy()[:,:len(y_pred_)] > 0.5).astype(int)
@@ -612,9 +568,9 @@ class MultiTargetTrainer(Trainer):
             else:
                 gap = -1
             # here you can compute validation-specific metrics
-            return loss_time, loss, (hit, gap)
-        else:
-            return loss_time, loss
+            metrics = (hit, gap)
+
+        return loss_time, loss, metrics
 
     def aggregate_loss_and_metrics(self, loss, size, metrics=None):
         # scale to data size
@@ -636,41 +592,6 @@ class MultiTargetTrainer(Trainer):
                 losses['mean_gap'] = torch.inf
 
         return losses
-
-    def validation_pass(self):
-        val_loss = 0
-        val_size = 0
-        val_metrics = list()
-
-        forward_time = 0
-        loss_time = 0
-
-        self.net.eval()
-        with torch.set_grad_enabled(False):
-            for g, (y, w) in self.val_data:
-                g = g.to(self.device)
-                y = y.to(self.device)
-                w = w.to(self.device)
-
-                with self.autocast_if_mp():
-                    forward_time_, output = timeit(self.net)(g)
-                    forward_time += forward_time_
-
-                    loss_time_, loss, metrics = self.get_loss_and_metrics(output, y, w, validation=True)
-                    loss_time += loss_time_
-
-                    val_metrics.append(metrics)
-
-                val_loss += loss.item() * len(y)  # scales to data size
-                val_size += len(y)
-
-        losses = self.aggregate_loss_and_metrics(val_loss, val_size, val_metrics)
-        times = {
-            'forward': forward_time,
-            'loss': loss_time,
-        }
-
-        return losses, times
 
 class PhiMultiTargetTrainer(MultiTargetTrainer):
     def get_loss_and_metrics(self, output, y, w, validation=False):
@@ -706,6 +627,7 @@ class PhiMultiTargetTrainer(MultiTargetTrainer):
         )
         loss = weight @ loss.sum(-1)
 
+        metrics = None
         if validation:
             y_pred_ = (torch.sigmoid(output) > 0.5).squeeze(0).cpu().numpy().astype(int)[...,phi_filter.cpu()]
             y_ = (y.cpu().numpy()[:,:output.shape[-1]] > 0.5).astype(int)[...,phi_filter.cpu()]
@@ -715,102 +637,81 @@ class PhiMultiTargetTrainer(MultiTargetTrainer):
                 gap = w.max() - w[hit_i]
             else:
                 gap = -1
-            # here you can compute validation-specific metrics
-            return loss_time, loss, (hit, gap)
-        else:
-            return loss_time, loss
+
+            metrics = (hit, gap)
+
+        return loss_time, loss, metrics
 
 class OptimalsTrainer(Trainer):
-    def __init__(self, net: nn.Module, instances_fpaths: List[Path],
-                 sols_dir='/home/bruno/sat-gnn/data/interim', epochs=5, lr=0.001,
-                 optimizer: str = 'Adam', optimizer_params: dict = None,
-                 loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None,
-                 lr_scheduler_params: dict = None, mixed_precision=False,
-                 device=None, wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None, timeout=np.inf) -> None:
-        super().__init__(
-            net, epochs, lr, optimizer, optimizer_params, loss_func,
-            lr_scheduler, lr_scheduler_params, mixed_precision, device,
-            wandb_project, wandb_group, logger, checkpoint_every, random_seed,
-            max_loss, timeout,
-        )
-
-        self.sols_dir = sols_dir
-
-        self.instances_fpaths = [Path(i) for i in instances_fpaths]
+    def __init__(self, net: nn.Module, dataset: OptimalsDataset, epochs=5,
+                 lr=0.001, batch_size=2 ** 4, optimizer: str = 'Adam',
+                 optimizer_params=dict(), loss_func: str = 'BCEWithLogitsLoss',
+                 loss_func_params=dict(), lr_scheduler: str = None,
+                 lr_scheduler_params=dict(), mixed_precision=True, device=None,
+                 wandb_project=None, wandb_group=None, logger=None,
+                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        super().__init__(net, dataset, epochs, lr, batch_size, optimizer,
+                         optimizer_params, loss_func, loss_func_params,
+                         lr_scheduler, lr_scheduler_params, mixed_precision,
+                         device, wandb_project, wandb_group, logger,
+                         checkpoint_every, random_seed, max_loss)
 
         self._add_to_wandb_config({
-            "instances": [i.name for i in instances_fpaths],
             "n_passes": self.net.n_passes,
             "n_h_feats": self.net.n_h_feats,
             "single_conv": self.net.single_conv_for_both_passes,
             "n_convs": len(self.net.convs),
         })
 
-        self._val_score_label = 'mean_acc'
-        self._val_score_high_is_good = True
-
     def prepare_data(self):
-        train_data = OptimalsDataset(
-            self.instances_fpaths,
-            sols_dir=self.sols_dir,
-            split='train',
-        )
-        val_data = OptimalsDataset(
-            self.instances_fpaths,
-            sols_dir=self.sols_dir,
-            split='val',
-        )
+        train_data = self.dataset.get_split('train')
+        val_data = self.dataset.get_split('val')
 
-        self.data = dgl.dataloading.GraphDataLoader(
-            train_data,
-            shuffle=True,
-            batch_size=8,
-        )
-        self.val_data = dgl.dataloading.GraphDataLoader(
-            val_data,
-            batch_size=8,
-        )
+        train_loader = GraphDataLoader(train_data, batch_size=self.batch_size,
+                                       shuffle=True)
+        val_loader = GraphDataLoader(val_data, batch_size=self.batch_size,
+                                     shuffle=False)
 
-    def train_pass(self):
-        train_loss = 0
-        train_size = 0
+        return train_loader, val_loader
+
+    def data_pass(self, data, train=False):
+        loss = 0
+        size = 0
+        metrics = list()
 
         forward_time = 0
         loss_time = 0
         backward_time = 0
 
         self.net.train()
-        with torch.set_grad_enabled(True):
-            for g, y in self.data:
+        with torch.set_grad_enabled(train):
+            for g, y in data:
                 g = g.to(self.device)
                 y = y.to(self.device)
 
-                self._optim.zero_grad()
-
                 with self.autocast_if_mp():
-                    forward_time_, output = timeit(self.net)(g)
-                    forward_time += forward_time_
+                    batch_forward_time, output = timeit(self.net)(g)
+                    forward_time += batch_forward_time
 
-                    loss_time_, loss = self.get_loss_and_metrics(output, y)
-                    loss_time += loss_time_
+                    batch_loss_time, batch_loss, batch_metrics = self.get_loss_and_metrics(output, y, validation=not train)
+                loss_time += batch_loss_time
 
-                if self.mixed_precision:
-                    backward_time_, _  = timeit(self._scaler.scale(loss).backward)()
-                    self._scaler.step(self._optim)
-                    self._scaler.update()
-                else:
-                    backward_time_, _  = timeit(loss.backward)()
-                    self._optim.step()
-                backward_time += backward_time_
+                metrics.append(batch_metrics)
 
-                train_loss += loss.item() * len(y)
-                train_size += len(y)
+                if train:
+                    batch_backward_time = self.optim_step(batch_loss)
+                    backward_time += batch_backward_time
+
+                loss += batch_loss.item() * len(y)
+                size += len(y)
 
             if self.lr_scheduler is not None:
                 self._scheduler.step()
 
-        losses = self.aggregate_loss_and_metrics(train_loss, train_size)
+        if all([b_m is None for b_m in metrics]):
+            metrics = None
+
+        losses = self.aggregate_loss_and_metrics(loss, size, metrics)
         times = {
             'forward': forward_time,
             'loss': loss_time,
@@ -822,14 +723,15 @@ class OptimalsTrainer(Trainer):
     def get_loss_and_metrics(self, y_hat, y, validation=False):
         loss_time, loss =  timeit(self._loss_func)(y_hat, y)
 
+        metrics = None
         if validation:
             y_pred_ = (torch.sigmoid(y_hat) > 0.5).cpu().numpy().astype(int)
             y_ = (y.cpu().numpy() > 0.5).astype(int)
             accs = (y_pred_ == y_).sum(-1) / y_.shape[-1]
-            # here you can compute validation-specific metrics
-            return loss_time, loss, accs
-        else:
-            return loss_time, loss
+
+            metrics = accs
+
+        return loss_time, loss, metrics
 
     def aggregate_loss_and_metrics(self, loss, size, metrics=None):
         # scale to data size
@@ -847,61 +749,20 @@ class OptimalsTrainer(Trainer):
 
         return losses
 
-    def validation_pass(self):
-        val_loss = 0
-        val_size = 0
-        val_metrics = list()
-
-        forward_time = 0
-        loss_time = 0
-
-        self.net.eval()
-        with torch.set_grad_enabled(False):
-            for g, y in self.val_data:
-                g = g.to(self.device)
-                y = y.to(self.device)
-
-                with self.autocast_if_mp():
-                    forward_time_, output = timeit(self.net)(g)
-                    forward_time += forward_time_
-
-                    loss_time_, loss, metrics = self.get_loss_and_metrics(output, y, validation=True)
-                    loss_time += loss_time_
-
-                    val_metrics.append(metrics)
-
-                val_loss += loss.item() * len(y)  # scales to data size
-                val_size += len(y)
-
-        losses = self.aggregate_loss_and_metrics(val_loss, val_size, val_metrics)
-        times = {
-            'forward': forward_time,
-            'loss': loss_time,
-        }
-
-        return losses, times
-
 class VarOptimalityTrainer(OptimalsTrainer):
-    def prepare_data(self):
-        train_data = VarOptimalityDataset(
-            self.instances_fpaths,
-            sols_dir=self.sols_dir,
-            split='train',
-            samples_per_instance=10,
-        )
-        val_data = VarOptimalityDataset(
-            self.instances_fpaths,
-            sols_dir=self.sols_dir,
-            split='val',
-            samples_per_instance=10,
-        )
+    def __init__(self, net: VarInstanceGCN, dataset: VarOptimalityDataset,
+                 epochs=5, lr=0.001, batch_size=2 ** 4, optimizer: str = 'Adam',
+                 optimizer_params=dict(), loss_func: str = 'BCEWithLogitsLoss',
+                 loss_func_params=dict(), lr_scheduler: str = None,
+                 lr_scheduler_params=dict(), mixed_precision=True, device=None,
+                 wandb_project=None, wandb_group=None, logger=None,
+                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        super().__init__(net, dataset, epochs, lr, batch_size, optimizer,
+                         optimizer_params, loss_func, loss_func_params,
+                         lr_scheduler, lr_scheduler_params, mixed_precision,
+                         device, wandb_project, wandb_group, logger,
+                         checkpoint_every, random_seed, max_loss)
 
-        self.data = dgl.dataloading.GraphDataLoader(
-            train_data,
-            shuffle=True,
-            batch_size=8,
-        )
-        self.val_data = dgl.dataloading.GraphDataLoader(
-            val_data,
-            batch_size=8,
-        )
+        self._add_to_wandb_config({
+            "samples_per_instance": self.dataset.samples_per_instance,
+        })
