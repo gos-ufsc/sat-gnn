@@ -443,6 +443,20 @@ def get_model_scip(instance, coupling=True, recurso=None, new_ineq=False,
 
     return model
 
+def add_trust_region(model, values: dict(), Delta=15):
+    abs_diffs = list()
+    i = 0
+    for var in model.getVars():
+        if var.name in values.keys():
+            diff = var - values[var.name]
+
+            abs_diffs.append(model.addVar(name="diff(%s)" % i, lb=0, ub=1, vtype="CONTINUOUS"))
+            model.addCons(abs_diffs[-1] >= diff)
+            model.addCons(abs_diffs[-1] >= -diff)
+    model.addCons(quicksum(abs_diffs) <= Delta)
+
+    return model
+
 def get_coupling_constraints(X, instance, r=None):
     J = instance['jobs'][0]
     T = instance['tamanho'][0]
@@ -480,12 +494,12 @@ def get_coupling_constraints(X, instance, r=None):
     return g
 
 def get_soc(X, instance, r=None):
-    J = instance['jobs'][0]
-    T = instance['tamanho'][0]
-    uso_p = torch.Tensor(instance['uso_p']).to(X) # recurso utilizado por cada tarefa
+    J = instance['jobs']
+    T = instance['T']
+    uso_p = torch.Tensor(instance['power_use']).to(X) # recurso utilizado por cada tarefa
 
     if r is None:
-        r = torch.Tensor(instance['recurso_p'])[:T]
+        r = torch.Tensor(instance['power_resource'])[:T]
 
     # parameters
     soc_inicial = 0.7
@@ -510,7 +524,7 @@ def get_soc(X, instance, r=None):
     for t in range(1,T):
         soc[:,t] = soc[:,t-1] + (ef / q) * (i[:,t] / 60)
 
-    return soc
+    return torch.stack((soc, i, bat), dim=-1).flatten(1)
 
 def get_benders_cut(instance, solucao, verbose=False):
     subproblem = Model()
