@@ -7,6 +7,7 @@ from gurobipy import GRB
 from tqdm import tqdm
 import numpy as np
 import torch
+from pyscipopt import Model
 
 from src.dataset import MultiTargetDataset
 from src.net import InstanceGCN
@@ -14,19 +15,17 @@ from src.utils import load_from_wandb
 
 
 def get_ws_performance(graph, model, net, timeout=60):
-    vars_names = np.core.defchararray.array([v.getAttr(GRB.Attr.VarName) for v in model.getVars()])
+    vars_names = np.core.defchararray.array([v.name for v in model.getVars()])
     vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
 
     # baseline results
-    model_ = model.copy()
-    model_.Params.TimeLimit = timeout
-    # model_.Params.Heuristics = 0
-    # model_.Params.Presolve = 0
-    model_.update()
+    model_ = Model(sourceModel=model)
+    model_.setParam('limits/time', timeout)
+
     model_.optimize()
-    baseline_runtime = model_.Runtime
-    baseline_obj = model_.ObjVal
-    baseline_gap = model_.MIPGap
+    baseline_runtime = model_.getSolvingTime()
+    baseline_obj = model_.getObjVal()
+    baseline_gap = model_.getGap()
 
     with torch.no_grad():
         x_hat = torch.sigmoid(net(graph)).squeeze(0)
@@ -55,26 +54,31 @@ def get_ws_performance(graph, model, net, timeout=60):
         fixed_vars_names = vars_names[most_certain_idx[:n]]
 
         # fix variables
-        model_ = model.copy()
-        for fixed_var_name, fixed_var_X in zip(fixed_vars_names, fixed_x_hat):
-            model_.getVarByName(fixed_var_name).Start = fixed_var_X
+        model_ = Model(sourceModel=model)
 
-        model_.Params.TimeLimit = timeout
-        # model_.Params.Heuristics = 0
-        # model_.Params.Presolve = 0
-        model_.update()
+        sol = model_.createSol()
+        sol_values = dict(zip(fixed_vars_names, fixed_x_hat))
+        for var in model_.getVars():
+            if var.name in sol_values.keys():
+                model_.setSolVal(sol, var, sol_values[var.name])
+        
+        # TODO: implement soc variables warm starting
+        # if n == len(x_hat):
+        #     get_soc(torch.from_numpy(x_hat).unsqueeze(0), instance)
+
+        model_.setParam('limits/time', timeout)
         model_.optimize()
 
-        if model_.status not in [2, 9]:
-            # print('early fixing with n=',n,' made the optimizatio terminate with status ',model_.status)
+        if model_.getStatus().lower() not in ['optimal', 'timelimit']:
+            print('early fixing with n=',n,' made the optimizatio terminate with status ',model_.getStatus())
             break
 
-        runtimes.append(model_.Runtime)
-        objs.append(model_.ObjVal)
-        gaps.append(model_.MIPGap)
+        runtimes.append(model_.getSolvingTime())
+        objs.append(model_.getObjVal())
+        gaps.append(model_.getGap())
         ns.append(n)
 
-    objs = [100 * o / max(objs) for o in objs]
+    objs = [100 * o / baseline_obj for o in objs]
 
     return ns, runtimes, objs, gaps
 
@@ -95,7 +99,7 @@ if __name__ == '__main__':
     performances = list()
     for graph, _, model in tqdm(ds):
         # get T and J
-        x_vars = [v.varname for v in model.getVars() if 'x(' in v.varname]
+        x_vars = [v.name for v in model.getVars() if v.name.startswith('x(')]
         js = {int(var[len('x('):].split(',')[0]) for var in x_vars}
         ts = {int(var.split(',')[1][:-1]) for var in x_vars}
         T, J = len(ts), len(js)
@@ -108,5 +112,5 @@ if __name__ == '__main__':
             objs=objs, gaps=gaps
         ))
 
-    with open(f'ws_performance_{wandb_run_id}.pkl', 'wb') as f:
+    with open(f'scip_ws_performance_{wandb_run_id}.pkl', 'wb') as f:
         pickle.dump(performances, f)
