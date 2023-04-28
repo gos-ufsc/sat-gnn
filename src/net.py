@@ -3,7 +3,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dgl.nn import HeteroGraphConv, GraphConv, EGATConv, SAGEConv
+from copy import deepcopy
 
+
+def create_batch(g, xs):
+    g_batch = list()
+    for x in xs:
+        g_ = deepcopy(g)
+        curr_feats = g_.nodes['var'].data['x']
+        g_.nodes['var'].data['x'] = torch.hstack((
+            # unsqueeze features dimension, if necessary
+            curr_feats.view(curr_feats.shape[0],-1),
+            x.view(x.shape[-1],-1),
+        ))
+        g_batch.append(g_)
+    return dgl.batch(g_batch)
 
 class JobGCN(nn.Module):
     """Expects all features to be on the `x` data.
@@ -276,6 +290,9 @@ class InstanceGCN(nn.Module):
         else:
             return torch.stack([g_.nodes['var'].data['logit'] for g_ in dgl.unbatch(g)]).squeeze(-1)
 
+    def get_candidate(self, g):
+        return self(g)
+
 class AttentionInstanceGCN(InstanceGCN):
     def __init__(self, n_var_feats=7, n_con_feats=4, n_soc_feats=6, n_h_feats=64, single_conv_for_both_passes=False, n_passes=1, conv1='SAGEConv', conv1_kwargs={ 'aggregator_type': 'pool' }, conv2='SAGEConv', conv2_kwargs={ 'aggregator_type': 'pool' }, conv3=None, conv3_kwargs=dict(), readout_op=None):
         super().__init__(n_var_feats, n_con_feats, n_soc_feats, n_h_feats, single_conv_for_both_passes, n_passes, conv1, conv1_kwargs, conv2, conv2_kwargs, conv3, conv3_kwargs, readout_op)
@@ -337,3 +354,25 @@ class AttentionInstanceGCN(InstanceGCN):
             return dgl.readout_nodes(g, 'logit', op=self.readout_op, ntype='var')
         else:
             return torch.stack([g_.nodes['var'].data['logit'] for g_ in dgl.unbatch(g)]).squeeze(-1)
+
+class VarInstanceGCN(InstanceGCN):
+    def __init__(self, n_var_feats=8, n_con_feats=4, n_soc_feats=6,
+                 n_h_feats=64, single_conv_for_both_passes=False, n_passes=1,
+                 conv1='SAGEConv', conv1_kwargs={ 'aggregator_type': 'pool' },
+                 conv2='SAGEConv', conv2_kwargs={ 'aggregator_type': 'pool' },
+                 conv3=None, conv3_kwargs=dict(), readout_op=None):
+        super().__init__(n_var_feats, n_con_feats, n_soc_feats, n_h_feats,
+                         single_conv_for_both_passes, n_passes, conv1,
+                         conv1_kwargs, conv2, conv2_kwargs, conv3, conv3_kwargs,
+                         readout_op)
+
+    def get_candidate(self, g, n=100):
+        xs = torch.randint(0, 2, (n, g.num_nodes('var')))
+        gs = create_batch(g, xs)
+
+        y_hat = torch.sigmoid(self(gs))
+
+        y_flip = 1 - y_hat
+        x_hat = (xs - y_flip).abs().mean(0)  # prob. of the predicted optimal solution
+
+        return x_hat

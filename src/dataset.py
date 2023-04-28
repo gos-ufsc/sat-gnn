@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from dgl.data import DGLDataset
 
-from src.problem import get_model
+from src.problem import get_model, get_model_scip
 
 
 def make_graph_from_matrix(A, b, c):
@@ -162,7 +162,7 @@ class MultiTargetDataset(DGLDataset):
             self.gs.append(make_graph_from_model(m))
             self.targets.append(sols_objs)
 
-            models.append(m)
+            models.append(get_model_scip(instance, coupling=True, new_ineq=False))
         
         if return_model:
             self.models = models
@@ -242,6 +242,42 @@ class OptimalsDataset(DGLDataset):
 
         try:
             m = self.models[idx]
+            return g, y, m
+        except AttributeError:
+            return g, y
+
+class VarOptimalityDataset(OptimalsDataset):
+    def __init__(self, instances_fpaths, sols_dir='/home/bruno/sat-gnn/data/interim',
+                 name='Optimality of Dimensions - Instance', split='train',
+                 samples_per_instance=100, return_model=False, **kwargs):
+        super().__init__(instances_fpaths, sols_dir, name, split,
+                         return_model, **kwargs)
+
+        self.samples_per_instance = int(samples_per_instance)
+
+    def __len__(self):
+        return super().__len__() * self.samples_per_instance
+
+    def __getitem__(self, idx):
+        i = idx // self.samples_per_instance
+
+        g = deepcopy(self.gs[i])
+        # g = self.gs[i]
+
+        opt = torch.from_numpy(self.targets[i])
+
+        x = torch.randint(0, 2, opt.shape)  # generate random candidate
+        y = (x == opt).type(g.nodes['var'].data['x'].type())
+
+        curr_feats = g.nodes['var'].data['x']
+        g.nodes['var'].data['x'] = torch.hstack((
+            # unsqueeze features dimension, if necessary
+            curr_feats.view(curr_feats.shape[0],-1),
+            x.view(x.shape[-1],-1),
+        ))
+
+        try:
+            m = self.models[i]
             return g, y, m
         except AttributeError:
             return g, y

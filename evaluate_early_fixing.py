@@ -11,7 +11,7 @@ import torch
 from pyscipopt import Model
 
 from src.dataset import MultiTargetDataset
-from src.net import InstanceGCN
+from src.net import InstanceGCN, VarInstanceGCN
 from src.utils import load_from_wandb
 
 
@@ -30,7 +30,8 @@ def get_ef_performance(graph, model, net, timeout=60):
     baseline_gap = model_.getGap()
 
     with torch.no_grad():
-        x_hat = torch.sigmoid(net(graph)).squeeze(0)
+        # x_hat = torch.sigmoid(net(graph)).squeeze(0)
+        x_hat = net.get_candidate(graph)
     # phi_filter = torch.ones_like(x_hat) == 0  # only False
     # phi_filter = phi_filter.view(-1, 2*97)
     # phi_filter[:,97:] = True
@@ -88,7 +89,8 @@ if __name__ == '__main__':
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
     instances_fpaths = list(instances_dir.glob('97_9*.json'))
 
-    net = InstanceGCN(readout_op=None)
+    # net = InstanceGCN(readout_op=None)
+    net = VarInstanceGCN(readout_op=None)
     net = load_from_wandb(net, wandb_run_id, 'sat-gnn', 'model_last')
     net.eval()
 

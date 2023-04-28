@@ -16,7 +16,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from src.problem import get_soc
-from src.dataset import MultiTargetDataset, OptimalsDataset
+from src.dataset import MultiTargetDataset, OptimalsDataset, VarOptimalityDataset
 from src.utils import timeit
 
 
@@ -880,3 +880,28 @@ class OptimalsTrainer(Trainer):
         }
 
         return losses, times
+
+class VarOptimalityTrainer(OptimalsTrainer):
+    def prepare_data(self):
+        train_data = VarOptimalityDataset(
+            self.instances_fpaths,
+            sols_dir=self.sols_dir,
+            split='train',
+            samples_per_instance=10,
+        )
+        val_data = VarOptimalityDataset(
+            self.instances_fpaths,
+            sols_dir=self.sols_dir,
+            split='val',
+            samples_per_instance=10,
+        )
+
+        self.data = dgl.dataloading.GraphDataLoader(
+            train_data,
+            shuffle=True,
+            batch_size=8,
+        )
+        self.val_data = dgl.dataloading.GraphDataLoader(
+            val_data,
+            batch_size=8,
+        )
