@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from copy import deepcopy
 from pathlib import Path
 import pickle
@@ -122,131 +123,80 @@ def make_graph_from_model(model):
 
     return g
 
-class MultiTargetDataset(DGLDataset):
-    def __init__(self, instances_fpaths, sols_dir='/home/bruno/sat-gnn/data/interim',
-                 name='Optimality of Dimensions - Instance', split='train',
-                 return_model=False, **kwargs):
+class GraphDataset(DGLDataset,ABC):
+    def __init__(self, instances_fpaths,
+                 sols_dir='/home/bruno/sat-gnn/data/interim',
+                 name='Graph Dataset', split='train', return_model=False,
+                 **kwargs):
         super().__init__(name, **kwargs)
 
-        self.instances_fpaths = instances_fpaths
-        self.sols_dir = Path(sols_dir)
-        assert self.sols_dir.exists()
+        sols_dir = Path(sols_dir)
+        assert sols_dir.exists()
 
-        self.return_model = return_model
+        # necessary for re-splitting
+        self._own_kwargs = dict(instances_fpaths=instances_fpaths, sols_dir=sols_dir, return_model=return_model, **kwargs)
+        self.split = split
 
+        self._is_initialized = False
+
+    def initialize(self, instances_fpaths, sols_dir, return_model=False):
+        """Populates whatever is necessary for getitem and len."""
         i_range = torch.arange(150)
-        if split.lower() == 'train':
+        if self.split.lower() == 'train':
             i_range = i_range[:60]
-        elif split.lower() == 'val':
+        elif self.split.lower() == 'val':
             i_range = i_range[60:80]
-        elif split.lower() == 'test':
-            i_range = i_range[80:]
-        elif split.lower() == 'all':
-            pass
-
-        models = list()
-        self.targets = list()
-        self.gs = list()
-        for instance_fp in self.instances_fpaths:
-            i = int(instance_fp.name[:-len('.json')].split('_')[-1])
-            if i not in i_range:  # instance is not part of the split
-                continue
-
-            with open(instance_fp) as f:
-                instance = json.load(f)
-
-            sol_fp = self.sols_dir/instance_fp.name.replace('.json', '_sols.npz')
-            if not sol_fp.exists():
-                print('solutions were not computed for ', instance_fp)
-                continue
-            sol_npz = np.load(sol_fp)
-            sols_objs = sol_npz['arr_0'], sol_npz['arr_1']
-
-            m = get_model(instance, coupling=True, new_ineq=False)
-
-            self.gs.append(make_graph_from_model(m))
-            self.targets.append(sols_objs)
-
-            models.append(get_model_scip(instance, coupling=True, new_ineq=False))
-        
-        if self.return_model:
-            self.models = models
-        else:
-            del models
-
-    def __len__(self):
-        return len(self.gs)
-
-    def __getitem__(self, idx):
-        # g = deepcopy(self.gs[idx])
-        g = self.gs[idx]
-
-        ys = self.targets[idx]
-
-        try:
-            m = self.models[idx]
-            return g, ys, m
-        except AttributeError:
-            return g, ys
-
-    def get_split(self, split):
-        return MultiTargetDataset(self.instances_fpaths, self.sols_dir,
-                                  self.name, split, self.return_model)
-
-class OptimalsDataset(DGLDataset):
-    def __init__(self, instances_fpaths, sols_dir='/home/bruno/sat-gnn/data/interim',
-                 name='Optimality of Dimensions - Instance', split='train',
-                 return_model=False, **kwargs):
-        super().__init__(name, **kwargs)
-
-        self.instances_fpaths = instances_fpaths
-        self.sols_dir = Path(sols_dir)
-        assert self.sols_dir.exists()
-
-        self.return_model = return_model
-
-        i_range = torch.arange(150)
-        if split.lower() == 'train':
-            i_range = i_range[:60]
-        elif split.lower() == 'val':
-            i_range = i_range[60:80]
-        elif split.lower() == 'test':
+        elif self.split.lower() == 'test':
             i_range = i_range[80:]
 
         models = list()
         self.targets = list()
         self.gs = list()
-        for instance_fp in self.instances_fpaths:
+        for instance_fp in instances_fpaths:
             i = int(instance_fp.name[:-len('.json')].split('_')[-1])
             if i not in i_range:  # instance is not part of the split
                 continue
 
-            with open(instance_fp) as f:
-                instance = json.load(f)
-
-            sol_fp = self.sols_dir/instance_fp.name.replace('.json', '_opt.npz')
-            if not sol_fp.exists():
+            try:
+                target = self.load_target(instance_fp, sols_dir)
+            except AssertionError:
                 print('optimum was not computed for ', instance_fp)
                 continue
-            sol_npz = np.load(sol_fp)
-            obj, gap, runtime, sol = sol_npz['arr_0'], sol_npz['arr_1'], sol_npz['arr_2'], sol_npz['arr_3']
 
-            m = get_model(instance, coupling=True, new_ineq=False)
+            self.targets.append(target)
 
-            self.gs.append(make_graph_from_model(m))
-            self.targets.append(sol)
+            model, graph = self.load_instance(instance_fp)
 
-            models.append(m)
+            models.append(model)
+            self.gs.append(graph)
 
-        if self.return_model:
+        if return_model:
             self.models = models
         else:
             del models
 
-    def __len__(self):
+    @abstractmethod
+    def load_target(self, instance_fp, sols_dir):
+        pass
+
+    def load_instance(self, instance_fp):
+        with open(instance_fp) as f:
+            instance = json.load(f)
+
+        m = get_model(instance, coupling=True, new_ineq=False)
+        graph = make_graph_from_model(m)
+        return m,graph
+    
+    def maybe_initialize(self):
+        if not self._is_initialized:
+            self.initialize(**self._own_kwargs)
+
+            self._is_initialized = True
+
+    def len(self):
         return len(self.gs)
 
-    def __getitem__(self, idx):
+    def getitem(self, idx):
         # g = deepcopy(self.gs[idx])
         g = self.gs[idx]
 
@@ -258,9 +208,49 @@ class OptimalsDataset(DGLDataset):
         except AttributeError:
             return g, y
 
+    def __getitem__(self, idx):
+        self.maybe_initialize()
+        return self.getitem(idx)
+
+    def __len__(self):
+        self.maybe_initialize()
+        return self.len()
+
     def get_split(self, split):
-        return OptimalsDataset(self.instances_fpaths, self.sols_dir, self.name,
-                               split, self.return_model)
+        return type(self)(**self._own_kwargs, split=split)
+
+class MultiTargetDataset(GraphDataset):
+    def __init__(self, instances_fpaths,
+                 sols_dir='/home/bruno/sat-gnn/data/interim',
+                 name='Instance + Multiple targets', split='train', return_model=False,
+                 **kwargs):
+        super().__init__(instances_fpaths, sols_dir, name, split, return_model,
+                         **kwargs)
+
+    def load_target(self, instance_fp, sols_dir):
+        sol_fp = sols_dir/instance_fp.name.replace('.json', '_sols.npz')
+        assert sol_fp.exists()
+
+        sol_npz = np.load(sol_fp)
+        sols_objs = sol_npz['arr_0'], sol_npz['arr_1']
+
+        return sols_objs
+
+class OptimalsDataset(GraphDataset):
+    def __init__(self, instances_fpaths,
+                 sols_dir='/home/bruno/sat-gnn/data/interim',
+                 name='Instance + (quasi-)Optimal', split='train',
+                 return_model=False, **kwargs):
+        super().__init__(instances_fpaths, sols_dir, name, split, return_model, **kwargs)
+
+    def load_target(self, instance_fp, sols_dir):
+        sol_fp = sols_dir/instance_fp.name.replace('.json', '_opt.npz')
+        assert sol_fp.exists()
+
+        sol_npz = np.load(sol_fp)
+        obj, gap, runtime, sol = sol_npz['arr_0'], sol_npz['arr_1'], sol_npz['arr_2'], sol_npz['arr_3']
+
+        return sol
 
 class VarOptimalityDataset(OptimalsDataset):
     def __init__(self, instances_fpaths, sols_dir='/home/bruno/sat-gnn/data/interim',
@@ -274,7 +264,7 @@ class VarOptimalityDataset(OptimalsDataset):
     def __len__(self):
         return super().__len__() * self.samples_per_instance
 
-    def __getitem__(self, idx):
+    def getitem(self, idx):
         i = idx // self.samples_per_instance
 
         g = deepcopy(self.gs[i])
@@ -297,8 +287,3 @@ class VarOptimalityDataset(OptimalsDataset):
             return g, y, m
         except AttributeError:
             return g, y
-
-    def get_split(self, split):
-        return VarOptimalityDataset(self.instances_fpaths, self.sols_dir,
-                                    self.name, split, self.samples_per_instance,
-                                    self.return_model)
