@@ -123,6 +123,15 @@ def make_graph_from_model(model):
 
     return g
 
+class LazyGraphs:
+    def __init__(self, fpath):
+        assert Path(fpath).exists()
+
+        self._fpath = fpath
+
+    def __getitem__(self, idx):
+        return dgl.load_graphs(self._fpath, [idx])[0][0]
+
 class GraphDataset(DGLDataset,ABC):
     def __init__(self, instances_fpaths,
                  sols_dir='/home/bruno/sat-gnn/data/interim',
@@ -152,7 +161,7 @@ class GraphDataset(DGLDataset,ABC):
         models = list()
         self.targets = list()
         self.gs = list()
-        for instance_fp in instances_fpaths:
+        for instance_fp in sorted(instances_fpaths):
             i = int(instance_fp.name[:-len('.json')].split('_')[-1])
             if i not in i_range:  # instance is not part of the split
                 continue
@@ -218,6 +227,44 @@ class GraphDataset(DGLDataset,ABC):
 
     def get_split(self, split):
         return type(self)(**self._own_kwargs, split=split)
+
+    def save_dataset(self, fpath):
+        dgl.save_graphs(fpath, self.gs)
+
+        meta = {
+            'targets': self.targets,
+            'kwargs': self._own_kwargs,
+            'split': self.split,
+        }
+
+        try:
+            meta['models'] = self.models
+        except AttributeError:
+            pass
+
+        meta_fpath = str(fpath) + '.pkl'
+        with open(meta_fpath, 'wb') as f:
+            pickle.dump(meta, f)
+
+    @classmethod
+    def lazy_from_file(cls, fpath):
+        meta_fpath = str(fpath) + '.pkl'
+        with open(meta_fpath, 'rb') as f:
+            meta = pickle.load(f)
+        
+        self = cls(**meta['kwargs'], split=meta['kwargs'])
+        self.targets = meta['targets']
+
+        try:
+            self.models = meta['models']
+        except KeyError:
+            pass
+
+        self.gs = LazyGraphs(fpath)
+
+        self._is_initialized = True
+
+        return self
 
 class MultiTargetDataset(GraphDataset):
     def __init__(self, instances_fpaths,
