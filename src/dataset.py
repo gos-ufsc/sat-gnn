@@ -61,7 +61,7 @@ def make_graph_from_model(model):
 
     vars_names = [v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()]
     # grab all non-decision variables (everything that is not `x` or `phi`)
-    soc_vars_mask = np.array([('x(' not in v) and ('phi(' not in v) for v in vars_names])
+    soc_vars_mask = np.array([('x(' not in v) and ('phi(' not in v) and ('zeta(' not in v) for v in vars_names])
     soc_vars = np.arange(soc_vars_mask.shape[0])[soc_vars_mask]
     var_vars = np.arange(soc_vars_mask.shape[0])[~soc_vars_mask]
     soc_edges_mask = np.isin(edges.T[:,1], soc_vars)
@@ -109,7 +109,7 @@ def make_graph_from_model(model):
         A.max(0)[~soc_vars_mask],  # max_coeff
         A.min(0)[~soc_vars_mask],  # min_coeff
         np.ones_like(c[~soc_vars_mask]),  # int
-        np.array([float(v.rstrip(')').split(',')[-1]) / 97 for v in vars_names[:len(var_vars)]]),  # pos_emb (kind of)
+        np.array([float(v.rstrip(')').split(',')[-1]) / 97 for v in np.array(vars_names)[~soc_vars_mask]]),  # pos_emb (kind of)
     ), -1))
 
     g.nodes['soc'].data['x'] = torch.from_numpy(np.stack((
@@ -124,13 +124,18 @@ def make_graph_from_model(model):
     return g
 
 class LazyGraphs:
-    def __init__(self, fpath):
+    def __init__(self, fpath, idxs):
         assert Path(fpath).exists()
 
         self._fpath = fpath
+        self.idxs = idxs
 
     def __getitem__(self, idx):
-        return dgl.load_graphs(self._fpath, [idx])[0][0]
+        i = int(self.idxs[idx])
+        return dgl.load_graphs(self._fpath, [i])[0][0]
+    
+    def __len__(self):
+        return len(self.idxs)
 
 class GraphDataset(DGLDataset,ABC):
     def __init__(self, instances_fpaths,
@@ -143,10 +148,11 @@ class GraphDataset(DGLDataset,ABC):
         assert sols_dir.exists()
 
         # necessary for re-splitting
-        self._own_kwargs = dict(instances_fpaths=instances_fpaths, sols_dir=sols_dir, return_model=return_model, **kwargs)
+        self._own_kwargs = dict(instances_fpaths=sorted(instances_fpaths), sols_dir=sols_dir, return_model=return_model, **kwargs)
         self.split = split
 
         self._is_initialized = False
+        self._lazy = False
 
     def initialize(self, instances_fpaths, sols_dir, return_model=False):
         """Populates whatever is necessary for getitem and len."""
@@ -176,13 +182,18 @@ class GraphDataset(DGLDataset,ABC):
 
             model, graph = self.load_instance(instance_fp)
 
-            models.append(model)
+            if return_model:
+                models.append(model)
+
             self.gs.append(graph)
 
         if return_model:
             self.models = models
         else:
             del models
+
+        self._is_initialized = True
+        self._lazy = False
 
     @abstractmethod
     def load_target(self, instance_fp, sols_dir):
@@ -194,13 +205,14 @@ class GraphDataset(DGLDataset,ABC):
 
         m = get_model(instance, coupling=True, new_ineq=False)
         graph = make_graph_from_model(m)
-        return m,graph
-    
+
+        m = get_model_scip(instance, coupling=True, new_ineq=False)
+
+        return m, graph
+
     def maybe_initialize(self):
         if not self._is_initialized:
             self.initialize(**self._own_kwargs)
-
-            self._is_initialized = True
 
     def len(self):
         return len(self.gs)
@@ -226,9 +238,41 @@ class GraphDataset(DGLDataset,ABC):
         return self.len()
 
     def get_split(self, split):
-        return type(self)(**self._own_kwargs, split=split)
+        if self._lazy:
+            new_self = deepcopy(self)
+
+            i_range = torch.arange(150)
+            if split.lower() == 'train':
+                i_range = i_range[:60]
+            elif split.lower() == 'val':
+                i_range = i_range[60:80]
+            elif split.lower() == 'test':
+                i_range = i_range[80:]
+
+            # filter
+            instances_fpaths = self._own_kwargs['instances_fpaths']
+            split_mask = list()
+            for ifp in instances_fpaths:
+                i = int(ifp.name[:-len('.json')].split('_')[-1])
+                split_mask.append(i in i_range)
+            split_idxs = np.where(split_mask)[0]
+
+            new_self.gs.idxs = split_idxs
+            new_self.targets = [target for target, m in zip(self.targets, split_mask) if m]
+            try:
+                new_self.models = [model for model, m in zip(self.models, split_mask) if m]
+            except AttributeError:
+                pass
+
+            new_self.split = split
+
+            return new_self
+        else:
+            return type(self)(**self._own_kwargs, split=split)
 
     def save_dataset(self, fpath):
+        assert self.split == 'all'
+
         dgl.save_graphs(fpath, self.gs)
 
         meta = {
@@ -247,22 +291,44 @@ class GraphDataset(DGLDataset,ABC):
             pickle.dump(meta, f)
 
     @classmethod
-    def lazy_from_file(cls, fpath):
+    def from_file_lazy(cls, fpath, split=None):
         meta_fpath = str(fpath) + '.pkl'
         with open(meta_fpath, 'rb') as f:
             meta = pickle.load(f)
-        
+
+        # re-split keeping lazyness
+        if split is not None:
+            i_range = torch.arange(150)
+            if self.split.lower() == 'train':
+                i_range = i_range[:60]
+            elif self.split.lower() == 'val':
+                i_range = i_range[60:80]
+            elif self.split.lower() == 'test':
+                i_range = i_range[80:]
+            
+            # filter
+            instances_fpaths = meta['kwargs']['instances_fpaths']
+            split_mask = list()
+            for ifp in instances_fpaths:
+                i = int(ifp.name[:-len('.json')].split('_')[-1])
+                split_mask.append(i in i_range)
+            split_idxs = np.where(split_mask)[0]
+        else:
+            split_mask = np.ones(len(meta['targets'])).astype(bool)
+            split_idxs = np.arange(len(meta['targets']))
+
         self = cls(**meta['kwargs'], split=meta['kwargs'])
-        self.targets = meta['targets']
+        self.targets = [target for target, m in zip(meta['targets'], split_mask) if m]
 
         try:
-            self.models = meta['models']
+            self.models = [model for model, m in zip(meta['models'], split_mask) if m]
         except KeyError:
             pass
 
-        self.gs = LazyGraphs(fpath)
+        self.gs = LazyGraphs(fpath, idxs=split_idxs)
 
         self._is_initialized = True
+        self._lazy = True
 
         return self
 
@@ -279,7 +345,7 @@ class MultiTargetDataset(GraphDataset):
         assert sol_fp.exists()
 
         sol_npz = np.load(sol_fp)
-        sols_objs = sol_npz['arr_0'], sol_npz['arr_1']
+        sols_objs = np.rint(sol_npz['arr_0']).astype('uint8'), sol_npz['arr_1'].astype('uint32')
 
         return sols_objs
 
@@ -296,6 +362,65 @@ class OptimalsDataset(GraphDataset):
 
         sol_npz = np.load(sol_fp)
         obj, gap, runtime, sol = sol_npz['arr_0'], sol_npz['arr_1'], sol_npz['arr_2'], sol_npz['arr_3']
+
+        return sol
+
+class OptimalsWithZetaDataset(OptimalsDataset):
+    def __init__(self, instances_fpaths,
+                 sols_dir='/home/bruno/sat-gnn/data/interim',
+                 name='Instance + (quasi-)Optimal + Zeta variables',
+                 split='train', return_model=False, **kwargs):
+        super().__init__(instances_fpaths, sols_dir, name, split, return_model,
+                         **kwargs)
+
+    def load_instance(self, instance_fp):
+        with open(instance_fp) as f:
+            instance = json.load(f)
+
+        model = get_model(instance, coupling=True, new_ineq=False)
+
+        zeta = dict()
+        phi = dict()
+        x = dict()
+        for j in range(instance['jobs']):
+            for t in range(instance['T']):
+                phi[j,t] = model.getVarByName("phi(%d,%d)" % (j, t))
+                x[j,t] = model.getVarByName("x(%d,%d)" % (j, t))
+                zeta[j,t] = model.addVar(name="zeta(%s,%s)" % (j, t), lb=0, ub=1,
+                                         vtype=gurobipy.GRB.BINARY)
+                if t >= 1:
+                    model.addConstr(phi[j,t] - zeta[j,t] - x[j,t] + x[j,t-1] == 0)
+
+        model.update()
+
+        graph = make_graph_from_model(model)
+
+        m = get_model_scip(instance, coupling=True, new_ineq=False)
+
+        return m, graph
+
+    def load_target(self, instance_fp, sols_dir):
+        sol_fp = sols_dir/instance_fp.name.replace('.json', '_opt.npz')
+        assert sol_fp.exists()
+
+        sol_npz = np.load(sol_fp)
+        _, _, _, sol = sol_npz['arr_0'], sol_npz['arr_1'], sol_npz['arr_2'], sol_npz['arr_3']
+
+        # compute zeta target
+        with open(instance_fp) as f:
+            instance = json.load(f)
+
+        T = instance['T']
+        J = instance['jobs']
+
+        s = sol.reshape((J, 2*T))
+        x = s[:,:T]
+        phi = s[:,T:]
+
+        zeta = np.zeros_like(phi)
+        zeta[:,1:] = phi[:,1:] - x[:,1:] + x[:,:-1]
+
+        sol = np.hstack((sol, zeta.flatten())).astype('uint8')
 
         return sol
 

@@ -64,7 +64,6 @@ class Trainer(ABC):
         self.batch_size = batch_size
 
         self.net = net.to(self.device)
-        self.dataset = dataset
         self.optimizer = optimizer
         self.optimizer_params = optimizer_params
         self.loss_func = loss_func
@@ -97,6 +96,9 @@ class Trainer(ABC):
         self.wandb_group = wandb_group
 
         self.max_loss = max_loss
+
+        self.l.info('Preparing data')
+        self.train_data, self.val_data = self.prepare_data(dataset)
 
     def _load_optim(self, state_dict=None):
         Optimizer = eval(f"torch.optim.{self.optimizer}")
@@ -226,9 +228,6 @@ class Trainer(ABC):
         else:
             self.autocast_if_mp = nullcontext
 
-        self.l.info('Preparing data')
-        self.train_data, self.val_data = self.prepare_data()
-
         self._is_initalized = True
 
     def _add_to_wandb_config(self, d: dict):
@@ -252,15 +251,15 @@ class Trainer(ABC):
 
         self.l.info(f"Wandb set up. Run ID: {self._id}")
 
-    def prepare_data(self):
+    def prepare_data(self, dataset):
         """Splits dataset into training and validation data. Instantiate loaders.
         """
         generator = torch.Generator().manual_seed(33)
 
-        train_size = int(0.8 * len(self.dataset))
-        val_size = len(self.dataset) - train_size
+        train_size = int(0.8 * len(dataset))
+        val_size = len(dataset) - train_size
         train_data, val_data = torch.utils.data.random_split(
-            self.dataset,
+            dataset,
             (train_size, val_size),
             generator=generator
         )
@@ -365,7 +364,7 @@ class Trainer(ABC):
         return backward_time
     
     def get_loss_and_metrics(self, y_hat, y, validation=False):
-        loss_time, loss =  timeit(self._loss_func)(y_hat.view_as(y), y)
+        loss_time, loss =  timeit(self._loss_func)(y_hat.view_as(y), y.to(y_hat))
 
         metrics = None
         if validation:
@@ -485,9 +484,9 @@ class MultiTargetTrainer(Trainer):
             "n_convs": len(self.net.convs),
         })
 
-    def prepare_data(self):
-        train_data = self.dataset.get_split('train')
-        val_data = self.dataset.get_split('val')
+    def prepare_data(self, dataset):
+        train_data = dataset.get_split('train')
+        val_data = dataset.get_split('val')
 
         train_loader = GraphDataLoader(train_data, batch_size=self.batch_size,
                                        shuffle=True)
@@ -545,8 +544,8 @@ class MultiTargetTrainer(Trainer):
 
     def get_loss_and_metrics(self, output, y, w, validation=False):
         # TODO: maybe rewrite things so that batch_size > 1 is possible
-        y = y.squeeze(0)
-        w = w.squeeze(0)
+        y = y.squeeze(0).to(output)
+        w = w.squeeze(0).to(output)
 
         #compute weight
         weight = torch.softmax(w / w.max(), -1)
@@ -644,7 +643,7 @@ class PhiMultiTargetTrainer(MultiTargetTrainer):
 
 class OptimalsTrainer(Trainer):
     def __init__(self, net: nn.Module, dataset: OptimalsDataset, epochs=5,
-                 lr=0.001, batch_size=2 ** 4, optimizer: str = 'Adam',
+                 lr=0.001, batch_size=2 ** 2, optimizer: str = 'Adam',
                  optimizer_params=dict(), loss_func: str = 'BCEWithLogitsLoss',
                  loss_func_params=dict(), lr_scheduler: str = None,
                  lr_scheduler_params=dict(), mixed_precision=True, device=None,
@@ -663,12 +662,12 @@ class OptimalsTrainer(Trainer):
             "n_convs": len(self.net.convs),
         })
 
-    def prepare_data(self):
-        train_data = self.dataset.get_split('train')
-        val_data = self.dataset.get_split('val')
+    def prepare_data(self, dataset):
+        train_data = dataset.get_split('train')
+        val_data = dataset.get_split('val')
 
         train_loader = GraphDataLoader(train_data, batch_size=self.batch_size,
-                                       shuffle=True)
+                                       shuffle=False)
         val_loader = GraphDataLoader(val_data, batch_size=self.batch_size,
                                      shuffle=False)
 
@@ -721,7 +720,7 @@ class OptimalsTrainer(Trainer):
         return losses, times
 
     def get_loss_and_metrics(self, y_hat, y, validation=False):
-        loss_time, loss =  timeit(self._loss_func)(y_hat, y)
+        loss_time, loss =  timeit(self._loss_func)(y_hat, y.to(y_hat))
 
         metrics = None
         if validation:
@@ -764,5 +763,5 @@ class VarOptimalityTrainer(OptimalsTrainer):
                          checkpoint_every, random_seed, max_loss)
 
         self._add_to_wandb_config({
-            "samples_per_instance": self.dataset.samples_per_instance,
+            "samples_per_instance": dataset.samples_per_instance,
         })

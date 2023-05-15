@@ -3,7 +3,7 @@ import pickle
 import numpy as np
 import torch
 import torch.nn
-from src.dataset import MultiTargetDataset, OptimalsDataset, VarOptimalityDataset
+from src.dataset import MultiTargetDataset, OptimalsDataset, OptimalsWithZetaDataset, VarOptimalityDataset
 
 from src.net import AttentionInstanceGCN, InstanceGCN, VarInstanceGCN
 from src.trainer import MultiTargetTrainer, OptimalsTrainer, PhiMultiTargetTrainer, VarOptimalityTrainer
@@ -33,9 +33,15 @@ if __name__ == '__main__':
         net = InstanceGCN(
             n_h_feats=64,
             readout_op=None,
+            conv1='GATv2Conv',
+            # conv1_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
+            conv1_kwargs={'num_heads': 1,},
+            conv2='GATv2Conv',
+            # conv2_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
+            conv2_kwargs={'num_heads': 1,},
         )
 
-        instances_fpaths = list(Path('data/raw/').glob('97_9*.json'))
+        instances_fpaths = list(Path('data/raw/').glob('97_*.json'))
 
         # MultiTargetTrainer(
         #     net.double(),
@@ -44,33 +50,46 @@ if __name__ == '__main__':
         #                        split='all'),
         #     epochs=100,
         #     wandb_project=wandb_project,
-        #     wandb_group='NEW_TEST',
+        #     wandb_group='Multi-target',
+        #     random_seed=seed,
+        #     device=device,
+        # ).run()
+
+        OptimalsTrainer(
+            net.double(),
+            OptimalsDataset.from_file_lazy('data/processed/optimals_97_all.hdf5'),
+            # OptimalsDataset(instances_fpaths=instances_fpaths,
+            #                 sols_dir='/home/bruno/sat-gnn/data/interim'),
+            epochs=50,
+            wandb_project=wandb_project,
+            wandb_group='Optimals + Attention',
+            random_seed=seed,
+            device=device,
+        ).run()
+
+        # net = VarInstanceGCN(
+        #     n_h_feats=64,
+        #     readout_op=None,
+        # )
+        # VarOptimalityTrainer(
+        #     net.double(),
+        #     VarOptimalityDataset(instances_fpaths=instances_fpaths,
+        #                          sols_dir='/home/bruno/sat-gnn/data/interim'),
+        #     epochs=300,
+        #     wandb_project=wandb_project,
+        #     wandb_group='Var Optimality',
         #     random_seed=seed,
         #     device=device,
         # ).run()
 
         # OptimalsTrainer(
         #     net.double(),
-        #     OptimalsDataset(instances_fpaths=instances_fpaths,
-        #                     sols_dir='/home/bruno/sat-gnn/data/interim'),
-        #     epochs=100,
+        #     OptimalsWithZetaDataset.from_file_lazy('data/processed/optimalszeta_97_all.hdf5'),
+        #     # OptimalsWithZetaDataset(instances_fpaths=instances_fpaths,
+        #     #                         sols_dir='/home/bruno/sat-gnn/data/interim'),
+        #     epochs=50,
         #     wandb_project=wandb_project,
-        #     wandb_group='Optimals',
+        #     wandb_group='Optimals + Zeta',
         #     random_seed=seed,
         #     device=device,
         # ).run()
-
-        net = VarInstanceGCN(
-            n_h_feats=64,
-            readout_op=None,
-        )
-        VarOptimalityTrainer(
-            net.double(),
-            VarOptimalityDataset(instances_fpaths=instances_fpaths,
-                                 sols_dir='/home/bruno/sat-gnn/data/interim'),
-            epochs=30,
-            wandb_project=wandb_project,
-            wandb_group='Var Optimality',
-            random_seed=seed,
-            device=device,
-        ).run()
