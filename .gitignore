@@ -197,3 +197,6 @@ data/
 
 # ignore old stuff
 old/
+
+# results
+*.pkl
