@@ -2,7 +2,7 @@ import dgl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dgl.nn import HeteroGraphConv, GraphConv, EGATConv, SAGEConv
+from dgl.nn import HeteroGraphConv, GraphConv, EGATConv, SAGEConv, GATv2Conv
 from copy import deepcopy
 
 
@@ -154,6 +154,9 @@ class InstanceGCN(nn.Module):
         elif conv1 == 'SAGEConv':
             c1_forward = SAGEConv(n_h_feats, n_h_feats, **conv1_kwargs)
             c1_backward = SAGEConv(n_h_feats, n_h_feats, **conv1_kwargs)
+        elif conv1 == 'GATv2Conv':
+            c1_forward = GATv2Conv(n_h_feats, n_h_feats, **conv1_kwargs)
+            c1_backward = GATv2Conv(n_h_feats, n_h_feats, **conv1_kwargs)
 
         if single_conv_for_both_passes:
             c1_backward = c1_forward
@@ -182,6 +185,9 @@ class InstanceGCN(nn.Module):
             elif conv2 == 'SAGEConv':
                 c2_forward = SAGEConv(n_h_feats, n_h_feats, **conv2_kwargs)
                 c2_backward = SAGEConv(n_h_feats, n_h_feats, **conv2_kwargs)
+            elif conv2 == 'GATv2Conv':
+                c2_forward = GATv2Conv(n_h_feats, n_h_feats, **conv1_kwargs)
+                c2_backward = GATv2Conv(n_h_feats, n_h_feats, **conv1_kwargs)
 
             if single_conv_for_both_passes:
                 c2_backward = c2_forward
@@ -210,6 +216,9 @@ class InstanceGCN(nn.Module):
             elif conv3 == 'SAGEConv':
                 c3_forward = SAGEConv(n_h_feats, n_h_feats, **conv3_kwargs)
                 c3_backward = SAGEConv(n_h_feats, n_h_feats, **conv3_kwargs)
+            elif conv3 == 'GATv2Conv':
+                c3_forward = GATv2Conv(n_h_feats, n_h_feats, **conv1_kwargs)
+                c3_backward = GATv2Conv(n_h_feats, n_h_feats, **conv1_kwargs)
 
             if single_conv_for_both_passes:
                 c3_backward = c3_forward
@@ -269,7 +278,7 @@ class InstanceGCN(nn.Module):
                             #  mod_args={edge_weights_key: edge_weights})['con']
                              mod_kwargs={'edge_weights': edge_weights,
                                          'efeats': edge_weights})['con']
-                h_con = F.relu(h_con)
+                h_con = F.relu(h_con).view(-1, self.n_h_feats)
 
             # con -> var
             for conv in self.convs:
@@ -279,8 +288,8 @@ class InstanceGCN(nn.Module):
                         #   mod_args={edge_weights_key: edge_weights})
                           mod_kwargs={'edge_weights': edge_weights,
                                       'efeats': edge_weights})
-                h_var = F.relu(hs['var'])
-                h_soc = F.relu(hs['soc'])
+                h_var = F.relu(hs['var']).view(-1, self.n_h_feats)
+                h_soc = F.relu(hs['soc']).view(-1, self.n_h_feats)
 
         # per-node logits
         g.nodes['var'].data['logit'] = self.output(h_var)
