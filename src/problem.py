@@ -7,7 +7,8 @@ import torch
 import gurobipy
 from gurobipy import GRB
 
-from pyscipopt import Model, quicksum
+from pyscipopt import Model, quicksum, SCIP_EVENTTYPE
+from pyscipopt.scip import Event, Eventhdlr
 
 
 def random_instance(T, jobs, subs=1): 
@@ -257,8 +258,68 @@ def get_model(instance, coupling=True, recurso=None, new_ineq=False,
 
     return model
 
+class PrimalDualIntegralHandler(Eventhdlr):
+    def __init__(self, eventtypes=[SCIP_EVENTTYPE.NODESOLVED, SCIP_EVENTTYPE.BESTSOLFOUND],
+                 initial_primal=1e-20, initial_dual=1e4):
+        """`initial_primal/dual` punishes for longer times before first feasible.
+        """
+        self.eventtypes = eventtypes
+
+        self._eventtype = 0
+        for eventtype in self.eventtypes:
+            self._eventtype |= eventtype
+
+        self.primals = [initial_primal]
+        self.duals = [initial_dual]
+        self.times = [0]
+
+        self.calls = list()
+
+    def eventinit(self):
+        self.model.catchEvent(self._eventtype, self)
+
+    def eventexit(self):
+        self.model.dropEvent(self._eventtype, self)
+
+    def eventexec(self, event: Event):
+        try:
+            self.times.append(self.model.getTotalTime())
+            self.primals.append(self.model.getPrimalbound())
+            self.duals.append(self.model.getDualbound())
+        except Exception:
+            pass
+    
+    def get_primal_dual_integral(self):
+        sense = 1 if self.model.getObjectiveSense() == 'minimze' else -1
+        last_time = self.model.getTotalTime()
+
+        integral = 0
+        for i in range(1, len(self.times)):
+            dt = self.times[i] - self.times[i-1]
+            gap = sense * (self.primals[i-1] - self.duals[i-1])
+
+            integral += dt * gap
+
+        dt = last_time - self.times[-1]
+        gap = sense * (self.primals[-1] - self.duals[-1])
+
+        integral += dt * gap
+
+        return integral
+
+class ModelWithPrimalDualIntegral(Model):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.primal_dual_handler = PrimalDualIntegralHandler()
+        self.includeEventhdlr(self.primal_dual_handler, "Primal Dual Handler",
+                              "Catches changes in the primal and the dual bounds")
+
+    def get_primal_dual_integral(self, *args, **kwargs):
+        return self.primal_dual_handler.get_primal_dual_integral(*args, **kwargs)
+
 def get_model_scip(instance, coupling=True, recurso=None, new_ineq=False,
-              timeout=60):
+                   timeout=60, enable_primal_dual_integral=True):
     if isinstance(instance, str) or isinstance(instance, Path):
         with open(instance) as f:
             instance = json.load(f)
@@ -288,7 +349,10 @@ def get_model_scip(instance, coupling=True, recurso=None, new_ineq=False,
     win_max = instance['win_max']
 
     # create a model
-    model = Model()
+    if enable_primal_dual_integral:
+        model = ModelWithPrimalDualIntegral()
+    else:
+        model = Model()
     # model.Params.LogToConsole = 0
 
     if timeout is not None:
@@ -438,8 +502,6 @@ def get_model_scip(instance, coupling=True, recurso=None, new_ineq=False,
                 for t in range(0, T - max_cpu_time[j]):
                     model.addCons(phi[j,t] + x[j, t + max_cpu_time[j]] <= 1,
                                   name=f"VI_max_period_btw_jobs({j},{t})")
-
-    # model.update()
 
     return model
 
