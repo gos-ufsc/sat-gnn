@@ -33,12 +33,16 @@ if __name__ == '__main__':
         net = InstanceGCN(
             n_h_feats=64,
             readout_op=None,
-            conv1='GATv2Conv',
-            # conv1_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
-            conv1_kwargs={'num_heads': 1,},
-            conv2='GATv2Conv',
-            # conv2_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
-            conv2_kwargs={'num_heads': 1,},
+            # conv1='GraphConv',
+            # conv1_kwargs={'norm': 'both'},
+            # conv2='GraphConv',
+            # conv2_kwargs={'norm': 'both'},
+            # conv1='GATv2Conv',
+            # # conv1_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
+            # conv1_kwargs={'num_heads': 1,},
+            # conv2='GATv2Conv',
+            # # conv2_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
+            # conv2_kwargs={'num_heads': 1,},
         )
 
         instances_fpaths = list(Path('data/raw/').glob('97_*.json'))
@@ -62,7 +66,7 @@ if __name__ == '__main__':
             #                 sols_dir='/home/bruno/sat-gnn/data/interim'),
             epochs=50,
             wandb_project=wandb_project,
-            wandb_group='Optimals + Attention',
+            wandb_group='Optimals + SAGE',
             random_seed=seed,
             device=device,
         ).run()

@@ -19,6 +19,67 @@ def create_batch(g, xs):
         g_batch.append(g_)
     return dgl.batch(g_batch)
 
+class PreNormLayer(nn.Module):
+    """Pre-normalization layer of Gasse, 2019.
+
+    Roughly follows their (baseline) implementation.
+    https://github.com/ds4dm/learn2branch
+    """
+    def __init__(self, n_units, shift=True, scale=True, trainable=False) -> None:
+        super().__init__()
+
+        self.shift = shift
+        self.scale = scale
+
+        self.beta = nn.Parameter(torch.zeros(n_units), requires_grad=trainable & shift)
+        self.sigma = nn.Parameter(torch.ones(n_units), requires_grad=trainable & scale)
+
+        self.n_units = n_units
+
+        self._count = 0
+        self._m2 = 0
+        self._average = 0
+        self._variance = 0
+
+        # self.waiting_updates = False
+        # self.received_updates = False
+
+        self.update = False
+
+    def forward(self, x):
+        if self.update:
+            self._update(x)
+
+        return (x - self.beta) / self.sigma
+
+    def _update(self, x):
+        """Online mean and variance estimation.
+
+        See: Chan et al. (1979) Updating Formulae and a Pairwise Algorithm for
+        Computing Sample Variances.
+        """
+        sample_average = x.mean(0)
+        sample_variance = x.var(0)
+        sample_count = x.shape[0]
+
+        delta = sample_average - self._average
+
+        self.m2 = (
+            self._variance * self._count + sample_variance * sample_count +
+            delta**2 * self._count * sample_count / (self._count + sample_count)
+        )
+
+        self._count += sample_count
+        self._average += delta * sample_count / self._count
+        self._variance = self.m2 / self._count if self._count > 0 else 1
+
+        # update parameters
+        if self.shift:
+            self.beta.data = self._average
+
+        if self.scale:
+            self.sigma.data = torch.where(self._variance <= 1e-6, torch.ones_like(self._variance), self._variance)
+
 class JobGCN(nn.Module):
     """Expects all features to be on the `x` data.
     """
@@ -127,14 +188,17 @@ class InstanceGCN(nn.Module):
         self.n_soc_feats = n_soc_feats
 
         self.soc_emb = nn.Sequential(
+            # PreNormLayer(n_soc_feats),
             nn.Linear(n_soc_feats, n_h_feats),
             nn.ReLU(),
         ).double()
         self.var_emb = nn.Sequential(
+            # PreNormLayer(n_var_feats),
             nn.Linear(n_var_feats, n_h_feats),
             nn.ReLU(),
         ).double()
         self.con_emb = nn.Sequential(
+            # PreNormLayer(n_con_feats),
             nn.Linear(n_con_feats, n_h_feats),
             nn.ReLU(),
         ).double()
@@ -251,6 +315,8 @@ class InstanceGCN(nn.Module):
                 module.weight.data /= 10
         self.apply(downscale_weights)
 
+        self._pretrain = False
+
     def forward(self, g):
         var_features = g.nodes['var'].data['x'].view(-1,self.n_var_feats)
         soc_features = g.nodes['soc'].data['x'].view(-1,self.n_soc_feats)
@@ -298,6 +364,18 @@ class InstanceGCN(nn.Module):
             return dgl.readout_nodes(g, 'logit', op=self.readout_op, ntype='var')
         else:
             return torch.stack([g_.nodes['var'].data['logit'] for g_ in dgl.unbatch(g)]).squeeze(-1)
+
+    @property
+    def pretrain(self):
+        return self._pretrain
+
+    @pretrain.setter
+    def pretrain(self, value: bool):
+        for m in self.modules():
+            if isinstance(m, PreNormLayer):
+                m.update = value
+
+        self._pretrain = value
 
     def get_candidate(self, g):
         return self(g)

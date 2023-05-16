@@ -671,6 +671,15 @@ class OptimalsTrainer(Trainer):
         val_loader = GraphDataLoader(val_data, batch_size=self.batch_size,
                                      shuffle=False)
 
+        # pre-training
+        self.net.eval()
+        self.net.pretrain = True
+        with torch.no_grad():
+            for g, _ in train_loader:
+                # run through all instances to update internal values
+                _ = self.net(g.to(self.device))
+        self.net.pretrain = False
+
         return train_loader, val_loader
 
     def data_pass(self, data, train=False):
@@ -682,7 +691,7 @@ class OptimalsTrainer(Trainer):
         loss_time = 0
         backward_time = 0
 
-        self.net.train()
+        self.net.train(train)
         with torch.set_grad_enabled(train):
             for g, y in data:
                 g = g.to(self.device)
