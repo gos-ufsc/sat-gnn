@@ -223,11 +223,13 @@ class GraphDataset(DGLDataset,ABC):
 
         y = self.targets[idx]
 
+        g.nodes['var'].data['y'] = torch.from_numpy(y).to(g.ndata['x']['var'])
+
         try:
             m = self.models[idx]
-            return g, y, m
+            return g, m
         except AttributeError:
-            return g, y
+            return g
 
     def __getitem__(self, idx):
         self.maybe_initialize()
@@ -349,6 +351,24 @@ class MultiTargetDataset(GraphDataset):
 
         return sols_objs
 
+    def getitem(self, idx):
+        # g = deepcopy(self.gs[idx])
+        g = self.gs[idx]
+
+        y, w = self.targets[idx]
+
+        y = torch.from_numpy(y).T
+        w = torch.from_numpy(w.astype(int)).unsqueeze(0)
+
+        g.nodes['var'].data['y'] = y.to(g.ndata['x']['var'])
+        g.nodes['var'].data['w'] = w.repeat(*(np.array(y.shape) // np.array(w.shape)))
+
+        try:
+            m = self.models[idx]
+            return g, m
+        except AttributeError:
+            return g
+
 class OptimalsDataset(GraphDataset):
     def __init__(self, instances_fpaths,
                  sols_dir='/home/bruno/sat-gnn/data/interim',
@@ -456,6 +476,6 @@ class VarOptimalityDataset(OptimalsDataset):
 
         try:
             m = self.models[i]
-            return g, y, m
+            return g, m
         except AttributeError:
-            return g, y
+            return g

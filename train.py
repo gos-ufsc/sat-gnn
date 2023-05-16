@@ -49,9 +49,10 @@ if __name__ == '__main__':
 
         # MultiTargetTrainer(
         #     net.double(),
-        #     MultiTargetDataset(instances_fpaths=instances_fpaths,
-        #                        sols_dir='/home/bruno/sat-gnn/data/interim',
-        #                        split='all'),
+        #     # MultiTargetDataset(instances_fpaths=instances_fpaths,
+        #     #                    sols_dir='/home/bruno/sat-gnn/data/interim',
+        #     #                    split='all'),
+        #     MultiTargetDataset.from_file_lazy('data/processed/multitarget_97_all.hdf5'),
         #     epochs=100,
         #     wandb_project=wandb_project,
         #     wandb_group='Multi-target',
@@ -66,7 +67,7 @@ if __name__ == '__main__':
             #                 sols_dir='/home/bruno/sat-gnn/data/interim'),
             epochs=50,
             wandb_project=wandb_project,
-            wandb_group='Optimals + SAGE',
+            wandb_group='Optimals + SAGE + Mbd PreNorm',
             random_seed=seed,
             device=device,
         ).run()

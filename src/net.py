@@ -188,17 +188,17 @@ class InstanceGCN(nn.Module):
         self.n_soc_feats = n_soc_feats
 
         self.soc_emb = nn.Sequential(
-            # PreNormLayer(n_soc_feats),
+            PreNormLayer(n_soc_feats),
             nn.Linear(n_soc_feats, n_h_feats),
             nn.ReLU(),
         ).double()
         self.var_emb = nn.Sequential(
-            # PreNormLayer(n_var_feats),
+            PreNormLayer(n_var_feats),
             nn.Linear(n_var_feats, n_h_feats),
             nn.ReLU(),
         ).double()
         self.con_emb = nn.Sequential(
-            # PreNormLayer(n_con_feats),
+            PreNormLayer(n_con_feats),
             nn.Linear(n_con_feats, n_h_feats),
             nn.ReLU(),
         ).double()
@@ -363,7 +363,7 @@ class InstanceGCN(nn.Module):
         if self.readout_op is not None:
             return dgl.readout_nodes(g, 'logit', op=self.readout_op, ntype='var')
         else:
-            return torch.stack([g_.nodes['var'].data['logit'] for g_ in dgl.unbatch(g)]).squeeze(-1)
+            return g.nodes['var'].data['logit']
 
     @property
     def pretrain(self):

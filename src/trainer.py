@@ -488,6 +488,8 @@ class MultiTargetTrainer(Trainer):
         train_data = dataset.get_split('train')
         val_data = dataset.get_split('val')
 
+        # TODO: still a problem for batch_size > 1 as different instances have
+        # different amounts of solutions
         train_loader = GraphDataLoader(train_data, batch_size=self.batch_size,
                                        shuffle=True)
         val_loader = GraphDataLoader(val_data, batch_size=self.batch_size,
@@ -506,16 +508,14 @@ class MultiTargetTrainer(Trainer):
 
         self.net.train()
         with torch.set_grad_enabled(train):
-            for g, (y, w) in data:
+            for g in data:
                 g = g.to(self.device)
-                y = y.to(self.device)
-                w = w.to(self.device)
 
                 with self.autocast_if_mp():
                     batch_forward_time, output = timeit(self.net)(g)
                     forward_time += batch_forward_time
 
-                    batch_loss_time, batch_loss, batch_metrics = self.get_loss_and_metrics(output, y, w, validation=not train)
+                    batch_loss_time, batch_loss, batch_metrics = self.get_loss_and_metrics(output, g, validation=not train)
                 loss_time += batch_loss_time
 
                 metrics.append(batch_metrics)
@@ -524,8 +524,8 @@ class MultiTargetTrainer(Trainer):
                     batch_backward_time = self.optim_step(batch_loss)
                     backward_time += batch_backward_time
 
-                loss += batch_loss.item() * len(y)
-                size += len(y)
+                loss += batch_loss.item() * g.batch_size
+                size += g.batch_size
 
             if self.lr_scheduler is not None:
                 self._scheduler.step()
@@ -542,23 +542,22 @@ class MultiTargetTrainer(Trainer):
 
         return losses, times
 
-    def get_loss_and_metrics(self, output, y, w, validation=False):
-        # TODO: maybe rewrite things so that batch_size > 1 is possible
-        y = y.squeeze(0).to(output)
-        w = w.squeeze(0).to(output)
+    def get_loss_and_metrics(self, y_hat, g, validation=False):
+        y = g.ndata['y']['var'].to(y_hat)
+        w = g.ndata['w']['var'].to(y_hat)
 
         #compute weight
-        weight = torch.softmax(w / w.max(), -1)
+        weight = torch.softmax(w / w.max(-1)[0].unsqueeze(-1), -1)
 
         loss_time, loss =  timeit(self._loss_func)(
-            output.repeat((y.shape[0],1)),
-            y[:,:output.shape[-1]]
+            y_hat.repeat(*(np.array(y.shape) // np.array(y_hat.shape))),
+            y.to(y_hat),
         )
-        loss = weight @ loss.sum(-1)
+        loss = (weight * loss).sum()
 
         metrics = None
         if validation:
-            y_pred_ = (torch.sigmoid(output) > 0.5).squeeze(0).cpu().numpy().astype(int)
+            y_pred_ = (torch.sigmoid(y_hat) > 0.5).squeeze(0).cpu().numpy().astype(int)
             y_ = (y.cpu().numpy()[:,:len(y_pred_)] > 0.5).astype(int)
             hit = y_pred_.tolist() in y_.tolist()
             if hit:
@@ -667,7 +666,7 @@ class OptimalsTrainer(Trainer):
         val_data = dataset.get_split('val')
 
         train_loader = GraphDataLoader(train_data, batch_size=self.batch_size,
-                                       shuffle=False)
+                                       shuffle=True)
         val_loader = GraphDataLoader(val_data, batch_size=self.batch_size,
                                      shuffle=False)
 
@@ -675,7 +674,7 @@ class OptimalsTrainer(Trainer):
         self.net.eval()
         self.net.pretrain = True
         with torch.no_grad():
-            for g, _ in train_loader:
+            for g in train_loader:
                 # run through all instances to update internal values
                 _ = self.net(g.to(self.device))
         self.net.pretrain = False
@@ -693,15 +692,14 @@ class OptimalsTrainer(Trainer):
 
         self.net.train(train)
         with torch.set_grad_enabled(train):
-            for g, y in data:
+            for g in data:
                 g = g.to(self.device)
-                y = y.to(self.device)
 
                 with self.autocast_if_mp():
                     batch_forward_time, output = timeit(self.net)(g)
                     forward_time += batch_forward_time
 
-                    batch_loss_time, batch_loss, batch_metrics = self.get_loss_and_metrics(output, y, validation=not train)
+                    batch_loss_time, batch_loss, batch_metrics = self.get_loss_and_metrics(output, g, validation=not train)
                 loss_time += batch_loss_time
 
                 metrics.append(batch_metrics)
@@ -710,8 +708,8 @@ class OptimalsTrainer(Trainer):
                     batch_backward_time = self.optim_step(batch_loss)
                     backward_time += batch_backward_time
 
-                loss += batch_loss.item() * len(y)
-                size += len(y)
+                loss += batch_loss.item() * g.batch_size
+                size += g.batch_size
 
             if self.lr_scheduler is not None:
                 self._scheduler.step()
@@ -728,16 +726,21 @@ class OptimalsTrainer(Trainer):
 
         return losses, times
 
-    def get_loss_and_metrics(self, y_hat, y, validation=False):
-        loss_time, loss =  timeit(self._loss_func)(y_hat, y.to(y_hat))
+    def get_loss_and_metrics(self, y_hat, g, validation=False):
+        y = g.ndata['y']['var']
+        loss_time, loss =  timeit(self._loss_func)(y_hat.view_as(y), y)
 
         metrics = None
         if validation:
-            y_pred_ = (torch.sigmoid(y_hat) > 0.5).cpu().numpy().astype(int)
-            y_ = (y.cpu().numpy() > 0.5).astype(int)
-            accs = (y_pred_ == y_).sum(-1) / y_.shape[-1]
+            y_preds = [g_.nodes['var'].data['logit'] for g_ in dgl.unbatch(g)]
+            y_preds = [(torch.sigmoid(y_pred) > 0.5).cpu().numpy().astype(int) for y_pred in y_preds]
 
-            metrics = accs
+            ys = [g_.nodes['var'].data['y'] for g_ in dgl.unbatch(g)]
+            ys = [(y.cpu().numpy() > 0.5).astype(int) for y in ys]
+
+            accs = [(y_pred.reshape(y.shape) == y).sum() / y.shape[-1] for y, y_pred in zip(ys, y_preds)]
+
+            metrics = np.array(accs)
 
         return loss_time, loss, metrics
 
