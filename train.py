@@ -33,10 +33,10 @@ if __name__ == '__main__':
         net = InstanceGCN(
             n_h_feats=64,
             readout_op=None,
-            # conv1='GraphConv',
-            # conv1_kwargs={'norm': 'both'},
-            # conv2='GraphConv',
-            # conv2_kwargs={'norm': 'both'},
+            conv1='GraphConv',
+            conv1_kwargs={'norm': 'both'},
+            conv2='GraphConv',
+            conv2_kwargs={'norm': 'both'},
             # conv1='GATv2Conv',
             # # conv1_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
             # conv1_kwargs={'num_heads': 1,},
@@ -60,14 +60,25 @@ if __name__ == '__main__':
         #     device=device,
         # ).run()
 
+        # train_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
+        #                                 sols_dir='/home/bruno/sat-gnn/data/interim',
+        #                                 split='train')
+        train_dataset = OptimalsDataset.from_file_lazy('data/processed/optimals_97_all.hdf5').get_split('train')
+        val_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
+                                      sols_dir='/home/bruno/sat-gnn/data/interim',
+                                      split='val')
+        test_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
+                                       sols_dir='/home/bruno/sat-gnn/data/interim',
+                                       split='val',
+                                       return_model=True)
         OptimalsTrainer(
             net.double(),
-            OptimalsDataset.from_file_lazy('data/processed/optimals_97_all.hdf5'),
-            # OptimalsDataset(instances_fpaths=instances_fpaths,
-            #                 sols_dir='/home/bruno/sat-gnn/data/interim'),
-            epochs=50,
+            training_dataset=train_dataset,
+            validation_dataset=val_dataset,
+            test_dataset=test_dataset,
+            epochs=100,
             wandb_project=wandb_project,
-            wandb_group='Optimals + SAGE + Mbd PreNorm',
+            wandb_group='Optimals + GaphConv',
             random_seed=seed,
             device=device,
         ).run()

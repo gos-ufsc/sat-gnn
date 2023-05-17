@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import logging
 import random
 from abc import ABC, abstractmethod
@@ -16,9 +17,10 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.sampler import SubsetRandomSampler
 from torch.utils.data import DataLoader, Dataset
 from dgl.dataloading import GraphDataLoader
-from src.net import VarInstanceGCN
+from dgl.data import DGLDataset
+from src.net import InstanceGCN, VarInstanceGCN
 
-from src.problem import get_soc
+from src.problem import ModelWithPrimalDualIntegral, get_soc
 from src.dataset import MultiTargetDataset, OptimalsDataset, VarOptimalityDataset
 from src.utils import timeit
 
@@ -41,8 +43,10 @@ class Trainer(ABC):
         random_seed: if not None (default = 42), fixes randomness for Python,
         NumPy as PyTorch (makes trainig reproducible).
     """
-    def __init__(self, net: nn.Module, dataset: Dataset, epochs=5, lr= 0.1,
-                 batch_size=2**4, optimizer: str = 'Adam',
+    def __init__(self, net: nn.Module, training_dataset: Dataset,
+                 validation_dataset: Dataset = None,
+                 test_dataset: Dataset = None, get_best_model=False, epochs=5,
+                 lr= 0.1, batch_size=2**4, optimizer: str = 'Adam',
                  optimizer_params=dict(), loss_func: str = 'MSELoss',
                  loss_func_params=dict(), lr_scheduler: str = None,
                  lr_scheduler_params=dict(), mixed_precision=True,
@@ -76,7 +80,7 @@ class Trainer(ABC):
         self.mixed_precision = mixed_precision
 
         if logger is None:
-            logging.basicConfig(level=logging.INFO)
+            logging.basicConfig(level=logging.INFO, datefmt='%y/%m/%d--%H:%M:%S')
             self.l = logging.getLogger(__name__)
         else:
             self.l = logger
@@ -96,9 +100,14 @@ class Trainer(ABC):
         self.wandb_group = wandb_group
 
         self.max_loss = max_loss
+        self.get_best_model = get_best_model
 
         self.l.info('Preparing data')
-        self.train_data, self.val_data = self.prepare_data(dataset)
+        self.train_data, self.val_data, self.test_data = self.prepare_data(
+            training_dataset,
+            validation_dataset,
+            test_dataset
+        )
 
     def _load_optim(self, state_dict=None):
         Optimizer = eval(f"torch.optim.{self.optimizer}")
@@ -251,23 +260,23 @@ class Trainer(ABC):
 
         self.l.info(f"Wandb set up. Run ID: {self._id}")
 
-    def prepare_data(self, dataset):
-        """Splits dataset into training and validation data. Instantiate loaders.
+    def prepare_data(self, training_dataset, validation_dataset=None,
+                     test_dataset=None):
+        """Instantiate data loaders.
         """
-        generator = torch.Generator().manual_seed(33)
+        train_loader = DataLoader(training_dataset, self.batch_size, shuffle=True)
 
-        train_size = int(0.8 * len(dataset))
-        val_size = len(dataset) - train_size
-        train_data, val_data = torch.utils.data.random_split(
-            dataset,
-            (train_size, val_size),
-            generator=generator
-        )
+        if validation_dataset is not None:
+            val_loader = DataLoader(validation_dataset, self.batch_size, shuffle=False)
+        else:
+            val_loader = None
 
-        train_loader = DataLoader(train_data, self.batch_size, shuffle=True)
-        val_loader = DataLoader(val_data, self.batch_size, shuffle=False)
+        if test_dataset is not None:
+            test_loader = DataLoader(test_dataset, self.batch_size, shuffle=False)
+        else:
+            test_loader = None
 
-        return train_loader, val_loader
+        return train_loader, val_loader, test_loader
 
     @staticmethod
     def _add_data_to_log(data: dict, prefix: str, data_to_log=dict()):
@@ -281,29 +290,51 @@ class Trainer(ABC):
         # train
         train_time, (train_losses, train_times) = timeit(self.train_pass)()
 
+        data_to_log = {
+            "train_loss": train_losses['all'],
+            "train_time": train_time,
+        }
+
+        self._add_data_to_log(train_losses, 'train_loss_', data_to_log)
+        self._add_data_to_log(train_times, 'train_time_', data_to_log)
+
         self.l.info(f"Training pass took {train_time:.3f} seconds")
         self.l.info(f"Training loss = {train_losses['all']}")
 
-        # validation
-        val_time, (val_losses, val_times) = timeit(self.validation_pass)()
+        if self.val_data is not None:
+            # validation
+            val_time, (val_losses, val_times) = timeit(self.validation_pass)()
 
-        self.l.info(f"Validation pass took {val_time:.3f} seconds")
-        self.l.info(f"Validation loss = {val_losses['all']}")
+            self.l.info(f"Validation pass took {val_time:.3f} seconds")
+            self.l.info(f"Validation loss = {val_losses['all']}")
 
-        data_to_log = {
-            "train_loss": train_losses['all'],
-            "val_loss": val_losses['all'],
-            "train_time": train_time,
-            "val_time": val_time,
-        }
-        self._add_data_to_log(train_losses, 'train_loss_', data_to_log)
-        self._add_data_to_log(val_losses, 'val_loss_', data_to_log)
-        self._add_data_to_log(train_times, 'train_time_', data_to_log)
-        self._add_data_to_log(val_times, 'val_time_', data_to_log)
+            data_to_log["val_loss"] = val_losses['all']
+            data_to_log["val_time"] =val_time
 
-        val_score = val_losses['all']  # defines best model
+            self._add_data_to_log(val_losses, 'val_loss_', data_to_log)
+            self._add_data_to_log(val_times, 'val_time_', data_to_log)
 
-        return data_to_log, val_score
+            val_score = val_losses['all']  # defines best model
+
+            if self.get_best_model and (val_score < self.best_val):
+                if self._log_to_wandb:
+                    self.l.info(f"Saving best model")
+                    self.save_model(name='model_best')
+
+                if self.test_data is not None:
+                    # test
+                    test_losses, test_times = self.test_pass()
+
+                    self.l.info(f"Test loss = {test_losses['all']}")
+
+                    data_to_log["test_loss"] = test_losses['all']
+
+                    self._add_data_to_log(test_losses, 'test_loss_', data_to_log)
+                    self._add_data_to_log(test_times, 'test_time_', data_to_log)
+
+                self.best_val = val_score
+
+        return data_to_log
 
     def run(self) -> nn.Module:
         if not self._is_initalized:
@@ -313,7 +344,7 @@ class Trainer(ABC):
             self.l.info(f"Epoch {self._e} started ({self._e+1}/{self.epochs})")
             epoch_start_time = time()
 
-            data_to_log, val_score = self._run_epoch()
+            data_to_log = self._run_epoch()
 
             if self._log_to_wandb:
                 wandb.log(data_to_log, step=self._e, commit=True)
@@ -322,13 +353,6 @@ class Trainer(ABC):
                     self.l.info(f"Saving checkpoint")
                     self.save_checkpoint()
 
-            if val_score < self.best_val:
-                if self._log_to_wandb:
-                    self.l.info(f"Saving best model")
-                    self.save_model(name='model_best')
-
-                self.best_val = val_score
-
             epoch_end_time = time()
             self.l.info(
                 f"Epoch {self._e} finished and took "
@@ -336,15 +360,29 @@ class Trainer(ABC):
             )
 
             if self.max_loss is not None:
-                if val_score > self.max_loss:
-                    break
+                raise NotImplementedError
+                # if val_score > self.max_loss:
+                #     break
 
             self._e += 1
-
+        
         if self._log_to_wandb:
             self.l.info(f"Saving model")
             self.save_model(name='model_last')
 
+        # evaluating final model
+        if self.test_data is not None:
+            # test
+            test_losses, _ = self.test_pass()
+
+            self.l.info(f"Final model's test loss = {test_losses['all']}")
+
+            if self._log_to_wandb:
+                for k, v in test_losses.items():
+                    if k != 'all':
+                        wandb.run.summary['last_test_'+k] = v
+
+        if self._log_to_wandb:
             wandb.finish()
 
         self.l.info('Training finished!')
@@ -439,6 +477,10 @@ class Trainer(ABC):
         self.net.eval()
         return self.data_pass(self.val_data, train=False)
 
+    def test_pass(self):
+        self.net.eval()
+        return self.data_pass(self.test_data, train=False)
+
     def save_checkpoint(self):
         checkpoint = {
             'epoch': self._e,
@@ -462,40 +504,59 @@ class Trainer(ABC):
 
         return fpath
 
-class MultiTargetTrainer(Trainer):
-    def __init__(self, net: nn.Module, dataset: Dataset, epochs=5, lr=0.001,
+class GraphTrainer(Trainer):
+    def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
+                 validation_dataset: DGLDataset = None,
+                 test_dataset: DGLDataset = None, get_best_model=False,
+                 ef_time_budget=10, epochs=5, lr=1e-3, batch_size=2 ** 4,
                  optimizer: str = 'Adam', optimizer_params=dict(),
-                 loss_func: str = 'BCEWithLogitsLoss',
-                 loss_func_params={'reduction': 'none'}, lr_scheduler: str = None,
-                 lr_scheduler_params=dict(), mixed_precision=True, device=None,
-                 wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
-        batch_size = 1
-        super().__init__(net, dataset, epochs, lr, batch_size, optimizer,
+                 loss_func: str = 'BCEWithLogitsLoss', loss_func_params=dict(),
+                 lr_scheduler: str = None, lr_scheduler_params=dict(),
+                 mixed_precision=True, device=None, wandb_project=None,
+                 wandb_group=None, logger=None, checkpoint_every=50,
+                 random_seed=42, max_loss=None) -> None:
+        super().__init__(net, training_dataset, validation_dataset,
+                         test_dataset, get_best_model, epochs, lr, batch_size, optimizer,
                          optimizer_params, loss_func, loss_func_params,
                          lr_scheduler, lr_scheduler_params, mixed_precision,
                          device, wandb_project, wandb_group, logger,
                          checkpoint_every, random_seed, max_loss)
+
+        self.ef_time_budget = ef_time_budget
 
         self._add_to_wandb_config({
             "n_passes": self.net.n_passes,
             "n_h_feats": self.net.n_h_feats,
             "single_conv": self.net.single_conv_for_both_passes,
             "n_convs": len(self.net.convs),
+            "train_dataset": training_dataset.name,
+            "val_dataset": validation_dataset.name if validation_dataset is not None else None,
+            "test_dataset": test_dataset.name if test_dataset is not None else None,
+            "ef_time_budget": self.ef_time_budget,
         })
 
-    def prepare_data(self, dataset):
-        train_data = dataset.get_split('train')
-        val_data = dataset.get_split('val')
-
-        # TODO: still a problem for batch_size > 1 as different instances have
-        # different amounts of solutions
-        train_loader = GraphDataLoader(train_data, batch_size=self.batch_size,
+    def prepare_data(self, training_dataset, validation_dataset=None,
+                     test_dataset=None):
+        """Instantiate data loaders.
+        """
+        train_loader = GraphDataLoader(training_dataset,
+                                       batch_size=self.batch_size,
                                        shuffle=True)
-        val_loader = GraphDataLoader(val_data, batch_size=self.batch_size,
-                                     shuffle=False)
 
-        return train_loader, val_loader
+        if validation_dataset is not None:
+            val_loader = GraphDataLoader(validation_dataset,
+                                         batch_size=self.batch_size,
+                                         shuffle=False)
+        else:
+            val_loader = None
+
+        if test_dataset is not None:
+            # does not use a dataloader for early-fixing evaluation
+            test_loader = test_dataset
+        else:
+            test_loader = None
+
+        return train_loader, val_loader, test_loader
 
     def data_pass(self, data, train=False):
         loss = 0
@@ -506,7 +567,7 @@ class MultiTargetTrainer(Trainer):
         loss_time = 0
         backward_time = 0
 
-        self.net.train()
+        self.net.train(train)
         with torch.set_grad_enabled(train):
             for g in data:
                 g = g.to(self.device)
@@ -541,6 +602,150 @@ class MultiTargetTrainer(Trainer):
         }
 
         return losses, times
+
+    def test_pass(self):
+        """Evaluate early-fixing.
+        """
+        self.l.info("Early-fixing evaluation.")
+
+        N = [0, 50, 100, 200, 500, 1000, -1]
+
+        results = {
+            'infeasibles': list(),
+            'runtimes': list(),
+            'objs': list(),
+            'gaps': list(),
+            'pd_integrals': list(),
+        }
+        sizes = list()
+
+        self.net.eval()
+        for graph, model in self.test_data:
+            graph = graph.to(self.device)
+
+            vars_names = np.core.defchararray.array([v.name for v in model.getVars()])
+            vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
+
+            # baseline results
+            (
+                baseline_infeasible,
+                baseline_runtime,
+                baseline_obj,
+                baseline_gap,
+                baseline_pd_integral
+            ) = self.evaluate_early_fixing(model, None, self.ef_time_budget)
+
+            assert not baseline_infeasible, "INFEASIBLE PROBLEM"
+
+            with torch.set_grad_enabled(False):
+                x_hat = self.net.get_candidate(graph).flatten().cpu()
+                x_hat = x_hat[:len(vars_names)]  # drop zetas
+
+            most_certain_idx  = (x_hat - 0.5).abs().sort(descending=True).indices
+
+            sizes.append(len(x_hat))
+            for k in results.keys():
+                results[k].append([-1,] * len(N))
+
+            for i in range(len(N)):
+                n = N[i] if N[i] >= 0 else len(x_hat)
+
+                if n == 0:
+                    results['infeasibles'][-1][i] = 0
+                    results['runtimes'][-1][i] = baseline_runtime
+                    results['objs'][-1][i] = baseline_obj
+                    results['gaps'][-1][i] = baseline_gap
+                    results['pd_integrals'][-1][i] = baseline_pd_integral
+                    continue
+
+                fixed_x_hat = (x_hat[most_certain_idx[:n]] > .5).to(x_hat)
+                fixed_vars_names = vars_names[most_certain_idx[:n]]
+                fixed_vars = dict(zip(fixed_vars_names, fixed_x_hat))
+
+                (
+                    infeasible, runtime, obj, gap, pd_integral
+                ) = self.evaluate_early_fixing(model, fixed_vars,
+                                               self.ef_time_budget)
+
+                if infeasible:
+                    results['runtimes'][-1][i] = baseline_runtime + runtime
+                    results['objs'][-1][i] = baseline_obj
+                    results['gaps'][-1][i] = baseline_gap
+                    results['pd_integrals'][-1][i] = baseline_pd_integral
+                else:
+                    results['runtimes'][-1][i] = runtime
+                    results['objs'][-1][i] = obj
+                    results['gaps'][-1][i] = gap
+                    results['pd_integrals'][-1][i] = pd_integral
+                results['infeasibles'][-1][i] = int(infeasible)
+
+        for k in list(results.keys()):
+            results[k] = np.array(results[k])
+            results['mean_'+k] = results[k].mean(0)
+
+            if k != 'infeasibles':
+                results['relative_'+k] = (results[k].T / results[k][:,0]).T
+                results['mean_relative_'+k] = results['relative_'+k].mean(0)
+
+        results['ns'] = N
+        results['sizes'] = sizes
+
+        results['all'] = results['mean_pd_integrals'].min() / results['mean_pd_integrals'][0]
+
+        return results, None
+
+    @staticmethod
+    def evaluate_early_fixing(model, fixed_vars: dict = None, timeout=10,
+                              hide_output=True):
+        model_ = ModelWithPrimalDualIntegral(sourceModel=model)
+        model_.setParam('limits/time', timeout)
+        model_.hideOutput(hide_output)
+
+        if fixed_vars is not None:
+            for var in model_.getVars():
+                try:
+                    fixed_var_X = fixed_vars[var.name]
+                    model_.fixVar(var, fixed_var_X)
+                except KeyError:
+                    pass
+
+        model_.optimize()
+
+        if model_.getStatus().lower() not in ['optimal', 'timelimit']:
+            infeasible = True
+            runtime = model_.getSolvingTime()
+            objective = 0
+            gap = -1
+            primal_dual_integral = -1
+        else:
+            infeasible = False
+            runtime = model_.getSolvingTime()
+            objective = model_.getObjVal()
+            gap = model_.getGap()
+            primal_dual_integral = model_.get_primal_dual_integral()
+
+        return infeasible, runtime, objective, gap, primal_dual_integral
+
+class MultiTargetTrainer(GraphTrainer):
+    def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
+                 validation_dataset: DGLDataset = None,
+                 test_dataset: DGLDataset = None, get_best_model=False,
+                 ef_time_budget=10, epochs=5, lr=0.001,
+                 optimizer: str = 'Adam', optimizer_params=dict(),
+                 loss_func: str = 'BCEWithLogitsLoss',
+                 loss_func_params={'reduction': 'none'},
+                 lr_scheduler: str = None, lr_scheduler_params=dict(),
+                 mixed_precision=True, device=None, wandb_project=None,
+                 wandb_group=None, logger=None, checkpoint_every=50,
+                 random_seed=42, max_loss=None) -> None:
+        batch_size = 1
+        super().__init__(net, training_dataset, validation_dataset,
+                         test_dataset, get_best_model, ef_time_budget, epochs,
+                         lr, batch_size, optimizer, optimizer_params,
+                         loss_func, loss_func_params, lr_scheduler,
+                         lr_scheduler_params, mixed_precision, device,
+                         wandb_project, wandb_group, logger, checkpoint_every,
+                         random_seed, max_loss)
 
     def get_loss_and_metrics(self, y_hat, g, validation=False):
         y = g.ndata['y']['var'].to(y_hat)
@@ -640,36 +845,35 @@ class PhiMultiTargetTrainer(MultiTargetTrainer):
 
         return loss_time, loss, metrics
 
-class OptimalsTrainer(Trainer):
-    def __init__(self, net: nn.Module, dataset: OptimalsDataset, epochs=5,
-                 lr=0.001, batch_size=2 ** 2, optimizer: str = 'Adam',
-                 optimizer_params=dict(), loss_func: str = 'BCEWithLogitsLoss',
-                 loss_func_params=dict(), lr_scheduler: str = None,
-                 lr_scheduler_params=dict(), mixed_precision=True, device=None,
-                 wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
-        super().__init__(net, dataset, epochs, lr, batch_size, optimizer,
-                         optimizer_params, loss_func, loss_func_params,
-                         lr_scheduler, lr_scheduler_params, mixed_precision,
-                         device, wandb_project, wandb_group, logger,
-                         checkpoint_every, random_seed, max_loss)
+class OptimalsTrainer(GraphTrainer):
+    def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
+                 validation_dataset: DGLDataset = None,
+                 test_dataset: DGLDataset = None, get_best_model=False,
+                 ef_time_budget=10, epochs=5, lr=0.001, batch_size=2 ** 2,
+                 optimizer: str = 'Adam', optimizer_params=dict(),
+                 loss_func: str = 'BCEWithLogitsLoss', loss_func_params=dict(),
+                 lr_scheduler: str = None, lr_scheduler_params=dict(),
+                 mixed_precision=True, device=None, wandb_project=None,
+                 wandb_group=None, logger=None, checkpoint_every=50,
+                 random_seed=42, max_loss=None) -> None:
+        super().__init__(net, training_dataset, validation_dataset,
+                         test_dataset, get_best_model, ef_time_budget, epochs,
+                         lr, batch_size, optimizer, optimizer_params,
+                         loss_func, loss_func_params, lr_scheduler,
+                         lr_scheduler_params, mixed_precision, device,
+                         wandb_project, wandb_group, logger, checkpoint_every,
+                         random_seed, max_loss)
 
-        self._add_to_wandb_config({
-            "n_passes": self.net.n_passes,
-            "n_h_feats": self.net.n_h_feats,
-            "single_conv": self.net.single_conv_for_both_passes,
-            "n_convs": len(self.net.convs),
-        })
+    # def prepare_data(self, dataset):
+    def prepare_data(self, training_dataset, validation_dataset=None,
+                     test_dataset=None):
+        train_loader, val_loader, test_loader = super().prepare_data(
+            training_dataset,
+            validation_dataset,
+            test_dataset
+        )
 
-    def prepare_data(self, dataset):
-        train_data = dataset.get_split('train')
-        val_data = dataset.get_split('val')
-
-        train_loader = GraphDataLoader(train_data, batch_size=self.batch_size,
-                                       shuffle=True)
-        val_loader = GraphDataLoader(val_data, batch_size=self.batch_size,
-                                     shuffle=False)
-
+        # TODO: move this out of the trainer?
         # pre-training
         self.net.eval()
         self.net.pretrain = True
@@ -679,52 +883,7 @@ class OptimalsTrainer(Trainer):
                 _ = self.net(g.to(self.device))
         self.net.pretrain = False
 
-        return train_loader, val_loader
-
-    def data_pass(self, data, train=False):
-        loss = 0
-        size = 0
-        metrics = list()
-
-        forward_time = 0
-        loss_time = 0
-        backward_time = 0
-
-        self.net.train(train)
-        with torch.set_grad_enabled(train):
-            for g in data:
-                g = g.to(self.device)
-
-                with self.autocast_if_mp():
-                    batch_forward_time, output = timeit(self.net)(g)
-                    forward_time += batch_forward_time
-
-                    batch_loss_time, batch_loss, batch_metrics = self.get_loss_and_metrics(output, g, validation=not train)
-                loss_time += batch_loss_time
-
-                metrics.append(batch_metrics)
-
-                if train:
-                    batch_backward_time = self.optim_step(batch_loss)
-                    backward_time += batch_backward_time
-
-                loss += batch_loss.item() * g.batch_size
-                size += g.batch_size
-
-            if self.lr_scheduler is not None:
-                self._scheduler.step()
-
-        if all([b_m is None for b_m in metrics]):
-            metrics = None
-
-        losses = self.aggregate_loss_and_metrics(loss, size, metrics)
-        times = {
-            'forward': forward_time,
-            'loss': loss_time,
-            'backward': backward_time,
-        }
-
-        return losses, times
+        return train_loader, val_loader, test_loader
 
     def get_loss_and_metrics(self, y_hat, g, validation=False):
         y = g.ndata['y']['var']
