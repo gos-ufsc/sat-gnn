@@ -459,8 +459,8 @@ class VarOptimalityDataset(OptimalsDataset):
     def getitem(self, idx):
         i = idx // self.samples_per_instance
 
-        g = deepcopy(self.gs[i])
-        # g = self.gs[i]
+        # g = deepcopy(self.gs[i])
+        g = self.gs[i]
 
         opt = torch.from_numpy(self.targets[i])
 
@@ -473,6 +473,8 @@ class VarOptimalityDataset(OptimalsDataset):
             curr_feats.view(curr_feats.shape[0],-1),
             x.view(x.shape[-1],-1),
         ))
+
+        g.nodes['var'].data['y'] = y.to(g.ndata['x']['var'])
 
         try:
             m = self.models[i]
