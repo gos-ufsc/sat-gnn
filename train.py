@@ -48,17 +48,10 @@ if __name__ == '__main__':
 
         train_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_97_all.hdf5').get_split('train')
         val_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_97_all.hdf5').get_split('val')
-        test_dataset = MultiTargetDataset(
-            instances_fpaths=instances_fpaths,
-            sols_dir='/home/bruno/sat-gnn/data/interim',
-            split='val',
-            return_model=True,
-        )
         MultiTargetTrainer(
             net.double(),
             training_dataset=train_dataset,
             validation_dataset=val_dataset,
-            test_dataset=test_dataset,
             epochs=100,
             wandb_project=wandb_project,
             wandb_group='Multi-target + SAGE + PreNorm',
@@ -75,15 +68,10 @@ if __name__ == '__main__':
         # #                               sols_dir='/home/bruno/sat-gnn/data/interim',
         # #                               split='val')
         # val_dataset = OptimalsDataset.from_file_lazy('data/processed/optimals_97_all.hdf5').get_split('val')
-        # test_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
-        #                                sols_dir='/home/bruno/sat-gnn/data/interim',
-        #                                split='val',
-        #                                return_model=True)
         # OptimalsTrainer(
         #     net.double(),
         #     training_dataset=train_dataset,
         #     validation_dataset=val_dataset,
-        #     test_dataset=test_dataset,
         #     epochs=100,
         #     wandb_project=wandb_project,
         #     wandb_group='Optimals + GATv2 + PreNorm',
@@ -95,13 +83,6 @@ if __name__ == '__main__':
         # train_dataset.samples_per_instance = 20
         # val_dataset = VarOptimalityDataset.from_file_lazy('data/processed/varoptimality_97_all.hdf5').get_split('val')
         # val_dataset.samples_per_instance = 10
-        # test_dataset = VarOptimalityDataset(
-        #     instances_fpaths=instances_fpaths,
-        #     sols_dir='/home/bruno/sat-gnn/data/interim',
-        #     split='val',
-        #     return_model=True,
-        # )
-        # test_dataset.samples_per_instance = 1
         # net = VarInstanceGCN(
         #     readout_op=None,
         # )
@@ -109,7 +90,6 @@ if __name__ == '__main__':
         #     net.double(),
         #     training_dataset=train_dataset,
         #     validation_dataset=val_dataset,
-        #     test_dataset=test_dataset,
         #     epochs=15,
         #     wandb_project=wandb_project,
         #     wandb_group='Var Optimality + SAGE',
