@@ -1,23 +1,32 @@
+from copy import deepcopy
+
 import dgl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dgl.nn import HeteroGraphConv, GraphConv, EGATConv, SAGEConv, GATv2Conv
-from copy import deepcopy
+from dgl import function as fn
+from dgl.base import DGLError
+from dgl.nn import EGATConv, GATv2Conv, GraphConv, HeteroGraphConv, SAGEConv
+from dgl.utils import expand_as_pair
 
 
 def create_batch(g, xs):
     g_batch = list()
     for x in xs:
         g_ = deepcopy(g)
-        curr_feats = g_.nodes['var'].data['x']
-        g_.nodes['var'].data['x'] = torch.hstack((
-            # unsqueeze features dimension, if necessary
-            curr_feats.view(curr_feats.shape[0],-1),
-            x.view(x.shape[-1],-1),
-        ))
+        g_.nodes['var'].data['x'][:,-1] = x.flatten()
         g_batch.append(g_)
     return dgl.batch(g_batch)
+
+def unbatch_y(g, y_batch):
+    with g.local_scope():
+        g.nodes['var'].data['y_batch'] = y_batch.flatten()
+
+        gs = dgl.unbatch(g)
+
+        ys = [g_.nodes['var'].data['y_batch'] for g_ in gs]
+
+    return torch.vstack(ys)
 
 class PreNormLayer(nn.Module):
     """Pre-normalization layer of Gasse, 2019.
@@ -79,6 +88,75 @@ class PreNormLayer(nn.Module):
 
         if self.scale:
             self.sigma.data = torch.where(self._variance <= 1e-6, torch.ones_like(self._variance), self._variance)
+
+class PreNormConv(GraphConv):
+    def __init__(self,
+                 in_feats,
+                 out_feats,
+                 weight=True,
+                 bias=True,
+                 activation=None,
+                 allow_zero_in_degree=False):
+        super().__init__(self, in_feats, out_feats, 'none', weight, bias,
+                         activation, allow_zero_in_degree)
+
+        self.pre_norm = PreNormLayer(self._in_feats)
+
+    def forward(self, graph, feat, weight=None, edge_weight=None):
+        with graph.local_scope():
+            if not self._allow_zero_in_degree:
+                if (graph.in_degrees() == 0).any():
+                    raise DGLError('There are 0-in-degree nodes in the graph, '
+                                   'output for those nodes will be invalid. '
+                                   'This is harmful for some applications, '
+                                   'causing silent performance regression. '
+                                   'Adding self-loop on the input graph by '
+                                   'calling `g = dgl.add_self_loop(g)` will resolve '
+                                   'the issue. Setting ``allow_zero_in_degree`` '
+                                   'to be `True` when constructing this module will '
+                                   'suppress the check and let the code run.')
+            aggregate_fn = fn.copy_u('h', 'm')
+            if edge_weight is not None:
+                assert edge_weight.shape[0] == graph.number_of_edges()
+                graph.edata['_edge_weight'] = edge_weight
+                aggregate_fn = fn.u_mul_e('h', '_edge_weight', 'm')
+
+            # (BarclayII) For RGCN on heterogeneous graphs we need to support GCN on bipartite.
+            feat_src, feat_dst = expand_as_pair(feat, graph)
+
+            if weight is not None:
+                if self.weight is not None:
+                    raise DGLError('External weight is provided while at the same time the'
+                                   ' module has defined its own weight parameter. Please'
+                                   ' create the module with flag weight=False.')
+            else:
+                weight = self.weight
+
+            if self._in_feats > self._out_feats:
+                # mult W first to reduce the feature size for aggregation.
+                if weight is not None:
+                    feat_src = torch.matmul(feat_src, weight)
+                graph.srcdata['h'] = feat_src
+                graph.update_all(aggregate_fn, fn.sum(msg='m', out='h'))
+                rst = graph.dstdata['h']
+            else:
+                # aggregate first then mult W
+                graph.srcdata['h'] = feat_src
+                graph.update_all(aggregate_fn, fn.sum(msg='m', out='h'))
+                rst = graph.dstdata['h']
+                if weight is not None:
+                    rst = torch.matmul(rst, weight)
+
+            # apply pre-normalization layer
+            rst = self.pre_norm(rst)
+
+            if self.bias is not None:
+                rst = rst + self.bias
+
+            if self._activation is not None:
+                rst = self._activation(rst)
+
+            return rst
 
 class JobGCN(nn.Module):
     """Expects all features to be on the `x` data.
@@ -381,8 +459,15 @@ class InstanceGCN(nn.Module):
         return self(g)
 
 class AttentionInstanceGCN(InstanceGCN):
-    def __init__(self, n_var_feats=7, n_con_feats=4, n_soc_feats=6, n_h_feats=64, single_conv_for_both_passes=False, n_passes=1, conv1='SAGEConv', conv1_kwargs={ 'aggregator_type': 'pool' }, conv2='SAGEConv', conv2_kwargs={ 'aggregator_type': 'pool' }, conv3=None, conv3_kwargs=dict(), readout_op=None):
-        super().__init__(n_var_feats, n_con_feats, n_soc_feats, n_h_feats, single_conv_for_both_passes, n_passes, conv1, conv1_kwargs, conv2, conv2_kwargs, conv3, conv3_kwargs, readout_op)
+    def __init__(self, n_var_feats=7, n_con_feats=4, n_soc_feats=6,
+                 n_h_feats=64, single_conv_for_both_passes=False, n_passes=1,
+                 conv1='SAGEConv', conv1_kwargs={ 'aggregator_type': 'pool' },
+                 conv2='SAGEConv', conv2_kwargs={ 'aggregator_type': 'pool' },
+                 conv3=None, conv3_kwargs=dict(), readout_op=None):
+        super().__init__(n_var_feats, n_con_feats, n_soc_feats, n_h_feats,
+                         single_conv_for_both_passes, n_passes, conv1,
+                         conv1_kwargs, conv2, conv2_kwargs, conv3,
+                         conv3_kwargs, readout_op)
 
         self.in_att = nn.Sequential(
             nn.Linear(self.n_h_feats, self.n_h_feats),
@@ -454,10 +539,12 @@ class VarInstanceGCN(InstanceGCN):
                          readout_op)
 
     def get_candidate(self, g, n=100):
-        xs = torch.randint(0, 2, (n, g.num_nodes('var')))
+        xs = torch.randint(0, 2, (n, g.num_nodes('var'))).to(g.device)
         gs = create_batch(g, xs)
 
         y_hat = torch.sigmoid(self(gs))
+
+        y_hat = unbatch_y(gs, y_hat)
 
         y_flip = 1 - y_hat
         x_hat = (xs - y_flip).abs().mean(0)  # prob. of the predicted optimal solution
