@@ -31,12 +31,11 @@ if __name__ == '__main__':
     # Early fixing the solution to all jobs, including coupling constraints
     for _ in range(1):
         net = InstanceGCN(
-            n_h_feats=64,
             readout_op=None,
-            conv1='GraphConv',
-            conv1_kwargs={'norm': 'both'},
-            conv2='GraphConv',
-            conv2_kwargs={'norm': 'both'},
+            # conv1='GraphConv',
+            # conv1_kwargs={'norm': 'both'},
+            # conv2='GraphConv',
+            # conv2_kwargs={'norm': 'both'},
             # conv1='GATv2Conv',
             # # conv1_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
             # conv1_kwargs={'num_heads': 1,},
@@ -47,53 +46,73 @@ if __name__ == '__main__':
 
         instances_fpaths = list(Path('data/raw/').glob('97_*.json'))
 
-        # MultiTargetTrainer(
-        #     net.double(),
-        #     # MultiTargetDataset(instances_fpaths=instances_fpaths,
-        #     #                    sols_dir='/home/bruno/sat-gnn/data/interim',
-        #     #                    split='all'),
-        #     MultiTargetDataset.from_file_lazy('data/processed/multitarget_97_all.hdf5'),
-        #     epochs=100,
-        #     wandb_project=wandb_project,
-        #     wandb_group='Multi-target',
-        #     random_seed=seed,
-        #     device=device,
-        # ).run()
-
-        # train_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
-        #                                 sols_dir='/home/bruno/sat-gnn/data/interim',
-        #                                 split='train')
-        train_dataset = OptimalsDataset.from_file_lazy('data/processed/optimals_97_all.hdf5').get_split('train')
-        val_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
-                                      sols_dir='/home/bruno/sat-gnn/data/interim',
-                                      split='val')
-        test_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
-                                       sols_dir='/home/bruno/sat-gnn/data/interim',
-                                       split='val',
-                                       return_model=True)
-        OptimalsTrainer(
+        train_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_97_all.hdf5').get_split('train')
+        val_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_97_all.hdf5').get_split('val')
+        test_dataset = MultiTargetDataset(
+            instances_fpaths=instances_fpaths,
+            sols_dir='/home/bruno/sat-gnn/data/interim',
+            split='val',
+            return_model=True,
+        )
+        MultiTargetTrainer(
             net.double(),
             training_dataset=train_dataset,
             validation_dataset=val_dataset,
             test_dataset=test_dataset,
             epochs=100,
             wandb_project=wandb_project,
-            wandb_group='Optimals + GaphConv',
+            wandb_group='Multi-target + SAGE + PreNorm',
             random_seed=seed,
+            ef_time_budget=10*60,  # visibility window
             device=device,
         ).run()
 
+        # # train_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
+        # #                                 sols_dir='/home/bruno/sat-gnn/data/interim',
+        # #                                 split='train')
+        # train_dataset = OptimalsDataset.from_file_lazy('data/processed/optimals_97_all.hdf5').get_split('train')
+        # # val_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
+        # #                               sols_dir='/home/bruno/sat-gnn/data/interim',
+        # #                               split='val')
+        # val_dataset = OptimalsDataset.from_file_lazy('data/processed/optimals_97_all.hdf5').get_split('val')
+        # test_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
+        #                                sols_dir='/home/bruno/sat-gnn/data/interim',
+        #                                split='val',
+        #                                return_model=True)
+        # OptimalsTrainer(
+        #     net.double(),
+        #     training_dataset=train_dataset,
+        #     validation_dataset=val_dataset,
+        #     test_dataset=test_dataset,
+        #     epochs=100,
+        #     wandb_project=wandb_project,
+        #     wandb_group='Optimals + GATv2 + PreNorm',
+        #     random_seed=seed,
+        #     device=device,
+        # ).run()
+
+        # train_dataset = VarOptimalityDataset.from_file_lazy('data/processed/varoptimality_97_all.hdf5').get_split('train')
+        # train_dataset.samples_per_instance = 20
+        # val_dataset = VarOptimalityDataset.from_file_lazy('data/processed/varoptimality_97_all.hdf5').get_split('val')
+        # val_dataset.samples_per_instance = 10
+        # test_dataset = VarOptimalityDataset(
+        #     instances_fpaths=instances_fpaths,
+        #     sols_dir='/home/bruno/sat-gnn/data/interim',
+        #     split='val',
+        #     return_model=True,
+        # )
+        # test_dataset.samples_per_instance = 1
         # net = VarInstanceGCN(
-        #     n_h_feats=64,
         #     readout_op=None,
         # )
         # VarOptimalityTrainer(
         #     net.double(),
-        #     VarOptimalityDataset(instances_fpaths=instances_fpaths,
-        #                          sols_dir='/home/bruno/sat-gnn/data/interim'),
-        #     epochs=300,
+        #     training_dataset=train_dataset,
+        #     validation_dataset=val_dataset,
+        #     test_dataset=test_dataset,
+        #     epochs=15,
         #     wandb_project=wandb_project,
-        #     wandb_group='Var Optimality',
+        #     wandb_group='Var Optimality + SAGE',
         #     random_seed=seed,
         #     device=device,
         # ).run()
