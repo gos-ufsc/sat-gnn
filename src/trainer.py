@@ -250,6 +250,7 @@ class Trainer(ABC):
         wandb.init(
             project=self.wandb_project,
             entity="brunompac",
+            job_type='train',
             group=self.wandb_group,
             config=self._wandb_config,
         )
@@ -378,8 +379,16 @@ class Trainer(ABC):
             self.l.info(f"Final model's test loss = {test_losses['all']}")
 
             if self._log_to_wandb:
+                # wandb.log(
+                #     {'last_test_'+k: v for k, v in test_losses.items() if k != 'all'},
+                #     step=self._e, commit=True,
+                # )
                 for k, v in test_losses.items():
-                    if k != 'all':
+                    if k.startswith('table_') or k.startswith('plot_'):
+                        wandb.log({
+                            'last_test_'+k: v
+                        }, step=self._e)
+                    elif k != 'all':
                         wandb.run.summary['last_test_'+k] = v
 
         if self._log_to_wandb:
@@ -679,18 +688,35 @@ class GraphTrainer(Trainer):
                     results['pd_integrals'][-1][i] = pd_integral
                 results['infeasibles'][-1][i] = int(infeasible)
 
+        mean_table_cols = [N,]
+        mean_table_cols_names = ['N',]
         for k in list(results.keys()):
             results[k] = np.array(results[k])
-            results['mean_'+k] = results[k].mean(0)
+            results['mean_'+k] = results[k].mean(0).tolist()
+            mean_table_cols.append(results['mean_'+k])
+            mean_table_cols_names.append(k)
+            # for i, n in enumerate(N):
+            #     results['mean_'+k+'_n='+str(n)] = results['mean_'+k][i]
 
-            if k != 'infeasibles':
+            if k not in ['infeasibles', 'gaps']:
                 results['relative_'+k] = (results[k].T / results[k][:,0]).T
-                results['mean_relative_'+k] = results['relative_'+k].mean(0)
+                results['mean_relative_'+k] = results['relative_'+k].mean(0).tolist()
+                results['relative_'+k] = results['relative_'+k].tolist()
+                mean_table_cols.append(results['mean_relative_'+k])
+                mean_table_cols_names.append('relative_'+k)
+                # for i, n in enumerate(N):
+                #     results['mean_relative_'+k+'_n='+str(n)] = results['mean_relative_'+k][i]
+
+            results[k] = results[k].tolist()
+
+        results['table_mean'] = wandb.Table(data=list(zip(*mean_table_cols)),
+                                            columns=mean_table_cols_names)
+        results['plot_mean_relative_objs'] = wandb.plot.line(results['table_mean'], 'N', 'relative_objs')
 
         results['ns'] = N
         results['sizes'] = sizes
 
-        results['all'] = results['mean_pd_integrals'].min() / results['mean_pd_integrals'][0]
+        results['all'] = min(results['mean_pd_integrals']) / results['mean_pd_integrals'][0]
 
         return results, None
 
@@ -720,9 +746,16 @@ class GraphTrainer(Trainer):
         else:
             infeasible = False
             runtime = model_.getSolvingTime()
-            objective = model_.getObjVal()
-            gap = model_.getGap()
-            primal_dual_integral = model_.get_primal_dual_integral()
+            try:
+                objective = model_.getObjVal()
+                gap = model_.getGap()
+                primal_dual_integral = model_.get_primal_dual_integral()
+            except:
+                # in case the problem is not infeasible but not solution was
+                # found during the time limit
+                objective = 0
+                gap = -1
+                primal_dual_integral = -1
 
         return infeasible, runtime, objective, gap, primal_dual_integral
 
@@ -920,19 +953,25 @@ class OptimalsTrainer(GraphTrainer):
         return losses
 
 class VarOptimalityTrainer(OptimalsTrainer):
-    def __init__(self, net: VarInstanceGCN, dataset: VarOptimalityDataset,
-                 epochs=5, lr=0.001, batch_size=2 ** 4, optimizer: str = 'Adam',
+    def __init__(self, net: VarInstanceGCN,
+                 training_dataset: VarOptimalityDataset,
+                 validation_dataset: VarOptimalityDataset = None,
+                 test_dataset: VarOptimalityDataset = None,
+                 get_best_model=False, ef_time_budget=10, epochs=5, lr=0.001,
+                 batch_size=2 ** 4, optimizer: str = 'Adam',
                  optimizer_params=dict(), loss_func: str = 'BCEWithLogitsLoss',
                  loss_func_params=dict(), lr_scheduler: str = None,
                  lr_scheduler_params=dict(), mixed_precision=True, device=None,
                  wandb_project=None, wandb_group=None, logger=None,
                  checkpoint_every=50, random_seed=42, max_loss=None) -> None:
-        super().__init__(net, dataset, epochs, lr, batch_size, optimizer,
-                         optimizer_params, loss_func, loss_func_params,
-                         lr_scheduler, lr_scheduler_params, mixed_precision,
-                         device, wandb_project, wandb_group, logger,
-                         checkpoint_every, random_seed, max_loss)
+        super().__init__(net, training_dataset, validation_dataset,
+                         test_dataset, get_best_model, ef_time_budget, epochs,
+                         lr, batch_size, optimizer, optimizer_params,
+                         loss_func, loss_func_params, lr_scheduler,
+                         lr_scheduler_params, mixed_precision, device,
+                         wandb_project, wandb_group, logger, checkpoint_every,
+                         random_seed, max_loss)
 
         self._add_to_wandb_config({
-            "samples_per_instance": dataset.samples_per_instance,
+            "samples_per_instance": training_dataset.samples_per_instance,
         })
