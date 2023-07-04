@@ -17,6 +17,15 @@ from src.net import InstanceGCN, VarInstanceGCN
 from src.utils import load_from_wandb
 
 
+def prepare_primal_curve(primal_curve, reference):
+    primals, times = primal_curve
+    primals = np.array(primals)
+    times = np.array(times)
+
+    primals = primals * (1 / reference)
+
+    return np.vstack([times, primals])
+
 def evaluate_early_fixing(model, reference_objective, fixed_vars: dict = None,
                           timeout=10, hide_output=True):
     model_ = ModelWithPrimalDualIntegral(sourceModel=model)
@@ -39,6 +48,8 @@ def evaluate_early_fixing(model, reference_objective, fixed_vars: dict = None,
         objective = 0
         gap = -1
         primal_dual_integral = -1
+        relative_primal_integral = 0
+        primal_curve = ([0,], [0,])
     else:
         infeasible = False
         runtime = model_.getSolvingTime()
@@ -47,6 +58,7 @@ def evaluate_early_fixing(model, reference_objective, fixed_vars: dict = None,
             gap = model_.getGap()
             primal_dual_integral = model_.get_primal_dual_integral()
             relative_primal_integral = model_.get_relative_primal_integral(reference_objective)
+            primal_curve = model_.get_primal_curve()
         except:
             # in case the problem is not infeasible but not solution was
             # found during the time limit
@@ -54,14 +66,17 @@ def evaluate_early_fixing(model, reference_objective, fixed_vars: dict = None,
             gap = np.nan
             primal_dual_integral = np.nan
             relative_primal_integral = np.nan
+            primal_curve = ([0,], [0,])
 
-    return infeasible, runtime, objective, gap, primal_dual_integral, relative_primal_integral
+    primal_curve = prepare_primal_curve(primal_curve, reference_objective)
+
+    return infeasible, runtime, objective, gap, primal_dual_integral, relative_primal_integral, primal_curve
 
 if __name__ == '__main__':
     model_run_id = sys.argv[-1]
-    N = [0, 50, 200, 1000]
-    time_budget = 10*60  # 10 min
-    # time_budget = 30  # 10 min
+    N = [0, 50, 200, 500, 1000]
+    # time_budget = 10*60  # 10 minutes
+    time_budget = 30  # 30 seconds
 
     assert len(model_run_id) == 8, 'a proper wandb run id was not provided'
 
@@ -97,6 +112,7 @@ if __name__ == '__main__':
     )
     # ds = OptimalsWithZetaDataset(instances_fpaths, split='val', return_model=True)
 
+    _skip = False
     for graph, model in dataset:
         quasi_optimal_objective = graph.ndata['w']['var'][0].max().item()
 
@@ -112,7 +128,8 @@ if __name__ == '__main__':
             baseline_obj,
             baseline_gap,
             baseline_pd_integral,
-            baseline_rel_primal_integral
+            baseline_rel_primal_integral,
+            baseline_primal_curve,
         ) = evaluate_early_fixing(model, quasi_optimal_objective, None,
                                   time_budget)
 
@@ -139,6 +156,8 @@ if __name__ == '__main__':
                     'gap': baseline_gap,
                     'pd_integral': baseline_pd_integral,
                     'rel_primal_integral': baseline_rel_primal_integral,
+                    'primal_curve': wandb.Table(['time', 'primal'],
+                                                baseline_primal_curve.T),
                 }
             else:
                 fixed_x_hat = (x_hat[most_certain_idx[:n]] > .5).to(x_hat)
@@ -146,7 +165,13 @@ if __name__ == '__main__':
                 fixed_vars = dict(zip(fixed_vars_names, fixed_x_hat))
 
                 (
-                    infeasible, runtime, obj, gap, pd_integral, rel_primal_integral
+                    infeasible,
+                    runtime,
+                    obj,
+                    gap,
+                    pd_integral,
+                    rel_primal_integral,
+                    primal_curve,
                 ) = evaluate_early_fixing(model, quasi_optimal_objective, fixed_vars,
                                         time_budget)
 
@@ -158,6 +183,8 @@ if __name__ == '__main__':
                         'gap': baseline_gap,
                         'pd_integral': baseline_pd_integral,
                         'rel_primal_integral': baseline_rel_primal_integral,
+                        'primal_curve': wandb.Table(['time', 'primal'],
+                                                    baseline_primal_curve.T),
                     }
                 else:
                     result = {
@@ -167,6 +194,8 @@ if __name__ == '__main__':
                         'gap': gap,
                         'pd_integral': pd_integral,
                         'rel_primal_integral': rel_primal_integral,
+                        'primal_curve': wandb.Table(['time', 'primal'],
+                                                    primal_curve.T),
                     }
                 result['infeasible'] = int(infeasible)
 
