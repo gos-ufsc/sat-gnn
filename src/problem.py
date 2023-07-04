@@ -260,7 +260,7 @@ def get_model(instance, coupling=True, recurso=None, new_ineq=False,
 
 class PrimalDualIntegralHandler(Eventhdlr):
     def __init__(self, eventtypes=[SCIP_EVENTTYPE.NODESOLVED, SCIP_EVENTTYPE.BESTSOLFOUND],
-                 initial_primal=1e-20, initial_dual=1e4):
+                 initial_primal=0, initial_dual=1e5):
         """`initial_primal/dual` punishes for longer times before first feasible.
         """
         self.eventtypes = eventtypes
@@ -284,44 +284,39 @@ class PrimalDualIntegralHandler(Eventhdlr):
     def eventexec(self, event: Event):
         try:
             self.times.append(self.model.getTotalTime())
-            self.primals.append(self.model.getPrimalbound())
+            primal = self.model.getPrimalbound()
+            if primal < self.primals[0]:
+                primal = self.primals[0]
+            self.primals.append(primal)
             self.duals.append(self.model.getDualbound())
         except Exception:
             pass
-    
+
     def get_primal_dual_integral(self):
         sense = 1 if self.model.getObjectiveSense() == 'minimze' else -1
         last_time = self.model.getTotalTime()
 
+        times_ = self.times + [last_time,]
         integral = 0
-        for i in range(1, len(self.times)):
-            dt = self.times[i] - self.times[i-1]
-            gap = sense * (self.primals[i-1] - self.duals[i-1])
+        for i in range(len(times_) - 1):
+            dt = times_[i+1] - times_[i]
+            gap = sense * (self.primals[i] - self.duals[i])
 
             integral += dt * gap
 
-        dt = last_time - self.times[-1]
-        gap = sense * (self.primals[-1] - self.duals[-1])
-
-        integral += dt * gap
-
         return integral
-    
+
     def get_relative_primal_integral(self, reference: float):
-        sense = 1 if self.model.getObjectiveSense() == 'minimze' else -1
+        # sense = 1 if self.model.getObjectiveSense() == 'minimze' else -1
         last_time = self.model.getTotalTime()
 
+        times_ = self.times + [last_time,]
         integral = 0
-        for i in range(1, len(self.times)):
-            dt = self.times[i] - self.times[i-1]
-            relative_primal = sense * (self.primals[i-1] - reference)
+        for i in range(len(times_) - 1):
+            dt = times_[i+1] - times_[i]
+            relative_primal = 1 - self.primals[i-1] / reference
 
             integral += dt * relative_primal
-
-        dt = last_time - self.times[-1]
-        relative_primal = sense * (self.primals[-1] - reference)
-
-        integral += dt * relative_primal
 
         return integral
 
@@ -338,6 +333,9 @@ class ModelWithPrimalDualIntegral(Model):
     
     def get_relative_primal_integral(self, *args, **kwargs):
         return self.primal_dual_handler.get_relative_primal_integral(*args, **kwargs)
+    
+    def get_primal_curve(self):
+        return self.primal_dual_handler.primals, self.primal_dual_handler.times
 
 def get_model_scip(instance, coupling=True, recurso=None, new_ineq=False,
                    timeout=60, enable_primal_dual_integral=True):
