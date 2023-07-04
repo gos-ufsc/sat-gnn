@@ -200,3 +200,5 @@ old/
 
 # results
 *.pkl
+
+notebooks/artifacts/
