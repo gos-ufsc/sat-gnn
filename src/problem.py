@@ -1,7 +1,8 @@
+from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 import json
-import pickle
+import dgl
 import re
 import torch
 import gurobipy
@@ -11,252 +12,517 @@ from pyscipopt import Model, quicksum, SCIP_EVENTTYPE
 from pyscipopt.scip import Event, Eventhdlr
 
 
-def random_instance(T, jobs, subs=1): 
-    orbit_power = np.loadtxt('/home/bruno/sat-gnn/data/raw/resource.csv')
+@dataclass
+class Instance:
+    """Instance of the ONTS problem."""
+    jobs: int
+    T: int
+    power_use: list  # recurso utilizado por cada tarefa
+    power_resource: list  # recurso disponível ao longo da trajetória
+    min_cpu_time: list  # mínimo de unidades de tempo que uma tarefa pode consumir em sequência
+    max_cpu_time: list  # máximo de unidades de tempo que uma tarefa pode consumir em sequência
+    min_job_period: list  # tempo mínimo que uma tarefa deve esperar para se repetir
+    max_job_period: list  # tempo máximo que uma tarefa pode esperar para se repetir
+    min_startup: list  # tempo mínimo de vezes que uma tarefa pode iniciar
+    max_startup: list  # tempo máximo de vezes que uma tarefa pode iniciar
+    priority: list  # prioridade de cada tarefa
+    win_min: list  # tamanho mínimo da janela
+    win_max: list  # tamanho máximo da janela
 
-    orbit_start = np.random.randint(0, 600)
-    power_resource = orbit_power[orbit_start:orbit_start+T]
+    subs: int = 1
+    initial_soc: float = 0.7
+    lower_limit: float = 0.0
+    ef: float = 0.9 
+    v_bat: float = 3.6 
+    q: float = 5
+    bat_usage: float = 5
 
-    min_power = 0.01
-    max_power = 4.00
-    power_use = np.random.rand(jobs)
-    power_use = (max_power - min_power) * power_use + min_power
+    @classmethod
+    def from_file(cls, filepath):
+        with open(filepath) as f:
+            data = json.load(f)
 
-    priority = np.arange(jobs) + 1
-    np.random.shuffle(priority)
+        return cls(**data)
 
-    min_cpu_time = np.random.randint(1, T / 5, size=jobs)
-    max_cpu_time = np.random.rand(jobs)
-    max_cpu_time = max_cpu_time * (T / 2 - min_cpu_time) + min_cpu_time
-    max_cpu_time = max_cpu_time.astype(int)
+    @classmethod
+    def random(cls, T, jobs, subs=1):
+        orbit_power = np.loadtxt('/home/bruno/sat-gnn/data/raw/resource.csv')
 
-    max_possible_startup = (T / min_cpu_time).astype(int)
-    min_startup = np.random.rand() * (max_possible_startup - 1) + 1
-    min_startup = min_startup.astype(int)
-    max_startup = np.random.rand(jobs)
-    max_startup = max_startup * (T - min_startup) + min_startup
-    max_startup = max_startup.astype(int)
+        orbit_start = np.random.randint(0, 600)
+        power_resource = orbit_power[orbit_start:orbit_start+T]
 
-    max_possible_job_period = (T / min_startup).astype(int)
-    min_job_period = np.random.rand(jobs)
-    min_job_period = min_job_period * (max_possible_job_period - 1) + 1
-    min_job_period = min_job_period.astype(int)
+        min_power = 0.01
+        max_power = 4.00
+        power_use = np.random.rand(jobs)
+        power_use = (max_power - min_power) * power_use + min_power
 
-    max_job_period = np.random.rand(jobs)
-    max_job_period = max_job_period * (T - min_job_period) + min_job_period
-    max_job_period = max_job_period.astype(int)
+        priority = np.arange(jobs) + 1
+        np.random.shuffle(priority)
 
-    win = np.eye(jobs)[0].astype(int)
-    np.random.shuffle(win)
-    win_min = win * np.random.randint(1, T * 1/5)
-    win_max = win * np.random.randint(T * 4/5, T)
-    win_max[win_max == 0] = T
+        min_cpu_time = np.random.randint(1, T / 5, size=jobs)
+        max_cpu_time = np.random.rand(jobs)
+        max_cpu_time = max_cpu_time * (T / 2 - min_cpu_time) + min_cpu_time
+        max_cpu_time = max_cpu_time.astype(int)
 
-    return {
-        "subs": subs,
-        "jobs": jobs,
-        "T": T,
+        max_possible_startup = (T / min_cpu_time).astype(int)
+        min_startup = np.random.rand() * (max_possible_startup - 1) + 1
+        min_startup = min_startup.astype(int)
+        max_startup = np.random.rand(jobs)
+        max_startup = max_startup * (T - min_startup) + min_startup
+        max_startup = max_startup.astype(int)
 
-        "power_use": power_use.tolist(),
-        "power_resource": power_resource.tolist(),
+        max_possible_job_period = (T / min_startup).astype(int)
+        min_job_period = np.random.rand(jobs)
+        min_job_period = min_job_period * (max_possible_job_period - 1) + 1
+        min_job_period = min_job_period.astype(int)
 
-        "min_cpu_time": min_cpu_time.tolist(),
-        "max_cpu_time": max_cpu_time.tolist(),
-        "min_job_period": min_job_period.tolist(),
-        "max_job_period": max_job_period.tolist(),
-        "min_startup": min_startup.tolist(),
-        "max_startup": max_startup.tolist(),
-        "priority": priority.tolist(),
-        "win_min": win_min.tolist(),
-        "win_max": win_max.tolist(),
-    }
+        max_job_period = np.random.rand(jobs)
+        max_job_period = max_job_period * (T - min_job_period) + min_job_period
+        max_job_period = max_job_period.astype(int)
 
-def get_model(instance, coupling=True, recurso=None, new_ineq=False,
-              timeout=60):
-    if isinstance(instance, str) or isinstance(instance, Path):
-        with open(instance) as f:
-            instance = json.load(f)
-    
-    jobs = list(range(instance['jobs']))
+        win = np.eye(jobs)[0].astype(int)
+        np.random.shuffle(win)
+        win_min = win * np.random.randint(1, T * 1/5)
+        win_max = win * np.random.randint(T * 4/5, T)
+        win_max[win_max == 0] = T
 
-    colunas_ = []
-    lb = 0
-    # T = instance['tamanho'][0]
-    T = instance['T']
+        return cls(
+            subs=subs,
+            jobs=jobs,
+            T=T,
+            power_use=power_use.tolist(),
+            power_resource=power_resource.tolist(),
+            min_cpu_time=min_cpu_time.tolist(),
+            max_cpu_time=max_cpu_time.tolist(),
+            min_job_period=min_job_period.tolist(),
+            max_job_period=max_job_period.tolist(),
+            min_startup=min_startup.tolist(),
+            max_startup=max_startup.tolist(),
+            priority=priority.tolist(),
+            win_min=win_min.tolist(),
+            win_max=win_max.tolist(),
+        )
 
-    if recurso is None:
-        recurso_p = instance['power_resource']  # this was a typo while generating the instances
-    else:
-        recurso_p = recurso
-    # print(recurso_p)
+    def to_gurobipy(self, coupling=True, new_inequalities=False, timeout=60) -> gurobipy.Model:
+        # create blank model
+        model = gurobipy.Model()
+        model.Params.LogToConsole = 0
 
-    priority = instance['priority'] # prioridade de cada tarefa
-    uso_p = instance['power_use'] # recurso utilizado por cada tarefa
-    min_statup = instance['min_startup'] # tempo mínimo de vezes que uma tarefa pode iniciar
-    max_statup = instance['max_startup'] # tempo máximo de vezes que uma tarefa pode iniciar
-    min_cpu_time = instance['min_cpu_time'] # tempo mínimo de unidades de tempo que uma tarefa pode consumir em sequência
-    max_cpu_time = instance['max_cpu_time'] # tempo máximo de unidades de tempo que uma tarefa pode consumir em sequência
-    min_periodo_job = instance['min_job_period'] # tempo mínimo que uma tarefa deve esperar para se repetir
-    max_periodo_job = instance['max_job_period'] # tempo máximo que uma tarefa pode esperar para se repetir
-    win_min = instance['win_min']
-    win_max = instance['win_max']
+        if timeout is not None:
+            model.setParam('TimeLimit', timeout)
 
-    # create a model
-    model = gurobipy.Model()
-    model.Params.LogToConsole = 0
+        # create decision variables
+        x = {}
+        phi = {}
+        for j in range(self.jobs):
+            # the order in which we add the variables matters. I want all
+            # variables associated with a given job to be together, like
+            # x(0,0),...,x(0,T-1),phi(0,0),...phi(0,T-1),x(1,0),...,x(1,T-1),phi(1,0),...
+            for t in range(self.T):
+                    x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1,
+                                          vtype=GRB.BINARY)
+            for t in range(self.T):
+                    phi[j,t] = model.addVar(name="phi(%s,%s)" % (j, t),
+                                            vtype=GRB.BINARY)
 
-    if timeout is not None:
-        model.setParam('TimeLimit', timeout)
+        # set objective
+        model.setObjective(sum(self.priority[j] * x[j,t]
+                               for j in range(self.jobs)
+                               for t in range(self.T)),
+                           GRB.MAXIMIZE)
 
-    if isinstance(jobs, list):
-        J_SUBSET = jobs
-    else:
-        J_SUBSET = [jobs]
+        # phi defines startups of jobs
+        for t in range(self.T):
+            for j in range(self.jobs):
+                if t == 0:
+                        model.addConstr(phi[j,t] >= x[j,t] - 0, f"C1_j{j}_t{t}")
+                else:
+                        model.addConstr(phi[j,t] >= x[j,t] - x[j,t - 1], f"C2_j{j}_t{t}")
 
-    # create decision variables
-    x = {}
-    phi = {}
-    for j in J_SUBSET:
-        # the order in which we add the variables matter. I want all variables
-        # associated with a given job to be together,
-        # like x(0,0),...,x(0,T-1),phi(0,0),...phi(0,T-1),x(1,0),...,x(1,T-1),phi(1,0),...
-        for t in range(T):
-                x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1, vtype=GRB.BINARY)
-        for t in range(T):
-                phi[j,t] = model.addVar(vtype=GRB.BINARY, name="phi(%s,%s)" % (j, t),)
+                model.addConstr(phi[j,t] <= x[j,t], f"C3_j{j}_t{t}")
 
-    soc_inicial = 0.7
-    limite_inferior = 0.0
-    ef = 0.9 
-    v_bat = 3.6 
-    q = 5
-    bat_usage = 5
+                if t == 0:
+                        model.addConstr(phi[j,t] <= 2 - x[j,t] - 0, f"C4_j{j}_t{t}")
+                else:
+                        model.addConstr(phi[j,t] <= 2 - x[j,t] - x[j,t - 1], f"C5_j{j}_t{t}")
 
-    # set objective
-    model.setObjective(sum(priority[j] * x[j,t] for j in J_SUBSET for t in range(T)), GRB.MAXIMIZE)
+        # minimum and maximum number of startups of a job
+        for j in range(self.jobs):
+            model.addConstr(sum(phi[j,t] for t in range(self.T)) >= self.min_startup[j], f"C6_j{j}")
+            model.addConstr(sum(phi[j,t] for t in range(self.T)) <= self.max_startup[j], f"C7_j{j}")
 
-    # phi defines startups of jobs
-    for t in range(T):
-        for j in J_SUBSET:
-            if t == 0:
-                    model.addConstr(phi[j,t] >= x[j,t] - 0, f"C1_j{j}_t{t}")
-            else:
-                    model.addConstr(phi[j,t] >= x[j,t] - x[j,t - 1], f"C2_j{j}_t{t}")
+            ###############################
+            # precisa ajustar
 
-            model.addConstr(phi[j,t] <= x[j,t], f"C3_j{j}_t{t}")
+            # execution window
+            model.addConstr(sum(x[j,t] for t in range(self.win_min[j])) == 0, f"C8_j{j}")
+            model.addConstr(sum(x[j,t] for t in range(self.win_max[j], self.T)) == 0, f"C9_j{j}")
 
-            if t == 0:
-                    model.addConstr(phi[j,t] <= 2 - x[j,t] - 0, f"C4_j{j}_t{t}")
-            else:
-                    model.addConstr(phi[j,t] <= 2 - x[j,t] - x[j,t - 1], f"C5_j{j}_t{t}")
+        for j in range(self.jobs):
+            # minimum period between jobs
+            for t in range(0, self.T - self.min_job_period[j] + 1):
+                model.addConstr(sum(phi[j,t_] for t_ in range(t, t + self.min_job_period[j])) <= 1, f"C10_j{j}_t{t}")
 
-    # minimum and maximum number of startups of a job
-    for j in J_SUBSET:
-        model.addConstr(sum(phi[j,t] for t in range(T)) >= min_statup[j], f"C6_j{j}")
-        model.addConstr(sum(phi[j,t] for t in range(T)) <= max_statup[j], f"C7_j{j}")
+            # periodo máximo entre jobs
+            for t in range(0, self.T - self.max_job_period[j] + 1):
+                model.addConstr(sum(phi[j,t_] for t_ in range(t, t + self.max_job_period[j])) >= 1, f"C11_j{j}_t{t}")
 
-        ###############################
-        # precisa ajustar
+            # min_cpu_time das jobs
+            for t in range(0, self.T - self.min_cpu_time[j] + 1):
+                model.addConstr(sum(x[j,t_] for t_ in range(t, t + self.min_cpu_time[j])) >= self.min_cpu_time[j] * phi[j,t], f"C12_j{j}_t{t}")
 
-        # execution window
-        model.addConstr(sum(x[j,t] for t in range(win_min[j])) == 0, f"C8_j{j}")
-        model.addConstr(sum(x[j,t] for t in range(win_max[j], T)) == 0, f"C9_j{j}")
+            # max_cpu_time das jobs
+            for t in range(0, self.T - self.max_cpu_time[j]):
+                    model.addConstr(sum(x[j,t_] for t_ in range(t, t + self.max_cpu_time[j] + 1)) <= self.max_cpu_time[j], f"C13_j{j}_t{t}")
 
-    for j in J_SUBSET:
-        # minimum period between jobs
-        for t in range(0, T - min_periodo_job[j] + 1):
-            model.addConstr(sum(phi[j,t_] for t_ in range(t, t + min_periodo_job[j])) <= 1, f"C10_j{j}_t{t}")
+            # min_cpu_time no final do periodo
+            for t in range(self.T - self.min_cpu_time[j] + 1, self.T):
+                    model.addConstr(sum(x[j,t_] for t_ in range(t, self.T)) >= (self.T - t) * phi[j,t], f"C14_j{j}_t{t}")
 
-        # periodo máximo entre jobs
-        for t in range(0, T - max_periodo_job[j] + 1):
-            model.addConstr(sum(phi[j,t_] for t_ in range(t, t + max_periodo_job[j])) >= 1, f"C11_j{j}_t{t}")
+        if coupling:
+            soc = {}
+            i = {}
+            b = {}
+            for t in range(self.T):
+                soc[t] = model.addVar(vtype=GRB.CONTINUOUS, name="soc(%s)" % t)
+                i[t] = model.addVar(lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS, name="i(%s)" % t)
+                b[t] = model.addVar(lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS, name="b(%s)" % t)
 
-        # min_cpu_time das jobs
-        for t in range(0, T - min_cpu_time[j] + 1):
-            model.addConstr(sum(x[j,t_] for t_ in range(t, t + min_cpu_time[j])) >= min_cpu_time[j] * phi[j,t], f"C12_j{j}_t{t}")
+            ################################
+            # Add power constraints
+            for t in range(self.T):
+                model.addConstr(sum(self.power_use[j] * x[j,t] for j in range(self.jobs)) <= self.power_resource[t] + self.bat_usage * self.v_bat, f"C15_t{t}")# * (1 - alpha[t]))
 
-        # max_cpu_time das jobs
-        for t in range(0, T - max_cpu_time[j]):
-                model.addConstr(sum(x[j,t_] for t_ in range(t, t + max_cpu_time[j] + 1)) <= max_cpu_time[j], f"C13_j{j}_t{t}")
+            ################################
+            # Bateria
+            ################################
+            for t in range(self.T):
+                model.addConstr(sum(self.power_use[j] * x[j,t] for j in range(self.jobs)) + b[t] == self.power_resource[t], f"C16_t{t}")
 
-        # min_cpu_time no final do periodo
-        for t in range(T - min_cpu_time[j] + 1, T):
-                model.addConstr(sum(x[j,t_] for t_ in range(t, T)) >= (T - t) * phi[j,t], f"C14_j{j}_t{t}")
+            # Define the i_t, SoC_t constraints in Gurobi
+            for t in range(self.T):
+                # P = V * I 
+                model.addConstr(b[t] / self.v_bat >= i[t], f"C17_t{t}")
 
-    if coupling:
-        soc = {}
-        i = {}
-        b = {}
-        for t in range(T):
-            soc[t] = model.addVar(vtype=GRB.CONTINUOUS, name="soc(%s)" % t)
-            i[t] = model.addVar(lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS, name="i(%s)" % t)
-            b[t] = model.addVar(lb=-GRB.INFINITY, vtype=GRB.CONTINUOUS, name="b(%s)" % t)
+                if t == 0:
+                    # SoC(1) = SoC(0) + p_carga[1]/60
+                    model.addConstr(soc[t] == self.initial_soc + (self.ef / self.q) * (i[t] / 60), f"C18_t{t}")
+                else:
+                    # SoC(t) = SoC(t-1) + (ef / Q) * I(t)
+                    model.addConstr(soc[t] == soc[t - 1] + (self.ef / self.q) * (i[t] / 60), f"C19_t{t}")
 
-        ################################
-        # Add power constraints
-        for t in range(T):
-            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) <= recurso_p[t] + bat_usage * v_bat, f"C15_t{t}")# * (1 - alpha[t]))
+                # Set the lower and upper limits on SoC
+                model.addConstr(self.lower_limit <= soc[t], f"C20_t{t}")
+                model.addConstr(soc[t] <= 1, f"C21_t{t}")
 
-        ################################
-        # Bateria
-        ################################
-        for t in range(T):
-            model.addConstr(sum(uso_p[j] * x[j,t] for j in J_SUBSET) + b[t] == recurso_p[t], f"C16_t{t}")
+        if new_inequalities:
+            # first
+            for j in range(self.jobs):
+                for t in range(self.T):
+                    model.addConstr(
+                        gurobipy.quicksum(
+                                phi[j, t_] for t_ in range(
+                                    t, min(self.T, t + self.min_cpu_time[j] + 1)
+                                )
+                            ) <= 1,
+                        name = f"VI_min_CPU_TIME_phi({j},{t})"
+                    )
 
-        # Define the i_t, SoC_t constraints in Gurobi
-        for t in range(T):
-            # P = V * I 
-            model.addConstr(b[t] / v_bat >= i[t], f"C17_t{t}")
-
-            if t == 0:
-                # SoC(1) = SoC(0) + p_carga[1]/60
-                model.addConstr(soc[t] == soc_inicial + (ef / q) * (i[t] / 60), f"C18_t{t}")
-            else:
-                # SoC(t) = SoC(t-1) + (ef / Q) * I(t)
-                model.addConstr(soc[t] == soc[t - 1] + (ef / q) * (i[t] / 60), f"C19_t{t}")
-
-            # Set the lower and upper limits on SoC
-            model.addConstr(limite_inferior <= soc[t], f"C20_t{t}")
-            model.addConstr(soc[t] <= 1, f"C21_t{t}")
-
-    if new_ineq:
-        # first
-        for j in J_SUBSET:
-            for t in range(T):
-                model.addConstr(gurobipy.quicksum(phi[j, t_]
-                                    for t_ in range(t, min(T, t + min_cpu_time[j] + 1))) <= 1,
-                                                    name = f"VI_min_CPU_TIME_phi({j},{t})")
-
-        # third
-        for j in J_SUBSET:
-            model.addConstr(gurobipy.quicksum(x[j, t] for t in range(T)) <=
-                                    max_cpu_time[j]*gurobipy.quicksum(phi[j, t]
-                                        for t in range(T)), name = f"VI_max_cpu_time_2({j})")
-        # fourth
-        for j in J_SUBSET:
-            for t in range(0, T - max_cpu_time[j], 1):
+            # third
+            for j in range(self.jobs):
                 model.addConstr(
-                    gurobipy.quicksum(x[j, t_] for t_ in range(t, t + max_cpu_time[j], 1)) <=
-                        max_cpu_time[j]*gurobipy.quicksum(phi[j, t_] for t_ in range(max(t - max_cpu_time[j] + 1,0), t + max_cpu_time[j], 1)),
-                    name = f"VI_max_cpu_time_3({j},{t})"
+                    gurobipy.quicksum(x[j, t] for t in range(self.T)) <=
+                        self.max_cpu_time[j] * gurobipy.quicksum(
+                            phi[j, t] for t in range(self.T)
+                        ),
+                    name = f"VI_max_cpu_time_2({j})"
                 )
 
-        # fifth
-        for j in J_SUBSET:
-            for t in range(0, T - min_periodo_job[j] + 1):
-                model.addConstr(gurobipy.quicksum(x[j, t_] for t_ in range(t, t + min_periodo_job[j])) <= min_periodo_job[j],
-                                name = f"VI_min_period_btw_jobs_2({j},{t})")
+            # fourth
+            for j in range(self.jobs):
+                for t in range(0, self.T - self.max_cpu_time[j], 1):
+                    model.addConstr(
+                        gurobipy.quicksum(x[j, t_] for t_ in range(
+                                t, t + self.max_cpu_time[j], 1
+                            )) <= self.max_cpu_time[j] * gurobipy.quicksum(
+                                phi[j, t_] for t_ in range(
+                                    max(t - self.max_cpu_time[j] + 1,0),
+                                    t + self.max_cpu_time[j],
+                                    1,
+                                )
+                            ),
+                        name = f"VI_max_cpu_time_3({j},{t})"
+                    )
 
-        # sixth
-        for j in J_SUBSET:
-            if max_cpu_time[j] < (max_periodo_job[j] - min_cpu_time[j]):
-                for t in range(0, T - max_cpu_time[j]):
-                    model.addConstr(phi[j,t] + x[j, t + max_cpu_time[j]] <= 1,
-                                  name=f"VI_max_period_btw_jobs({j},{t})")
+            # fifth
+            for j in range(self.jobs):
+                for t in range(0, self.T - self.min_job_period[j] + 1):
+                    model.addConstr(gurobipy.quicksum(x[j, t_] for t_ in range(t, t + self.min_job_period[j])) <= self.min_job_period[j],
+                                    name = f"VI_min_period_btw_jobs_2({j},{t})")
 
-    model.update()
+            # sixth
+            for j in range(self.jobs):
+                if self.max_cpu_time[j] < (self.max_job_period[j] - self.min_cpu_time[j]):
+                    for t in range(0, self.T - self.max_cpu_time[j]):
+                        model.addConstr(phi[j,t] + x[j, t + self.max_cpu_time[j]] <= 1,
+                                    name=f"VI_max_period_btw_jobs({j},{t})")
 
-    return model
+        model.update()
+
+        return model
+
+    def to_scip(self, coupling=True, new_inequalities=False, timeout=60,
+                enable_primal_dual_integral=True) -> Model:
+        # create a model
+        if enable_primal_dual_integral:
+            model = ModelWithPrimalDualIntegral()
+        else:
+            model = Model()
+
+        if timeout is not None:
+            model.setParam('limits/time', timeout)
+
+        # create decision variables
+        x = {}
+        phi = {}
+        for j in range(self.jobs):
+            # the order in which we add the variables matter. I want all
+            # variables associated with a given job to be together, like
+            # x(0,0),...,x(0,T-1),phi(0,0),...phi(0,T-1),x(1,0),...,x(1,T-1),phi(1,0),...
+            for t in range(self.T):
+                    x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1,
+                                          vtype="BINARY")
+            for t in range(self.T):
+                    phi[j,t] = model.addVar(name="phi(%s,%s)" % (j, t), lb=0, ub=1,
+                                            vtype="BINARY")
+
+        model.setObjective(quicksum(self.priority[j] * x[j,t]
+                                    for j in range(self.jobs)
+                                    for t in range(self.T)),
+                           "maximize")
+
+        # phi defines startups of jobs
+        for t in range(self.T):
+            for j in range(self.jobs):
+                if t == 0:
+                        model.addCons(phi[j,t] >= x[j,t] - 0, f"C1_j{j}_t{t}")
+                else:
+                        model.addCons(phi[j,t] >= x[j,t] - x[j,t - 1], f"C2_j{j}_t{t}")
+
+                model.addCons(phi[j,t] <= x[j,t], f"C3_j{j}_t{t}")
+
+                if t == 0:
+                        model.addCons(phi[j,t] <= 2 - x[j,t] - 0, f"C4_j{j}_t{t}")
+                else:
+                        model.addCons(phi[j,t] <= 2 - x[j,t] - x[j,t - 1], f"C5_j{j}_t{t}")
+
+        # minimum and maximum number of startups of a job
+        for j in range(self.jobs):
+            model.addCons(quicksum(phi[j,t] for t in range(self.T)) >= self.min_startup[j], f"C6_j{j}")
+            model.addCons(quicksum(phi[j,t] for t in range(self.T)) <= self.max_startup[j], f"C7_j{j}")
+
+            ###############################
+            # precisa ajustar
+
+            # execution window
+            model.addCons(quicksum(x[j,t] for t in range(self.win_min[j])) == 0, f"C8_j{j}")
+            model.addCons(quicksum(x[j,t] for t in range(self.win_max[j], self.T)) == 0, f"C9_j{j}")
+
+        for j in range(self.jobs):
+            # minimum period between jobs
+            for t in range(0, self.T - self.min_job_period[j] + 1):
+                model.addCons(quicksum(phi[j,t_] for t_ in range(t, t + self.min_job_period[j])) <= 1, f"C10_j{j}_t{t}")
+
+            # periodo máximo entre jobs
+            for t in range(0, self.T - self.max_job_period[j] + 1):
+                model.addCons(quicksum(phi[j,t_] for t_ in range(t, t + self.max_job_period[j])) >= 1, f"C11_j{j}_t{t}")
+
+            # min_cpu_time das jobs
+            for t in range(0, self.T - self.min_cpu_time[j] + 1):
+                model.addCons(quicksum(x[j,t_] for t_ in range(t, t + self.min_cpu_time[j])) >= self.min_cpu_time[j] * phi[j,t], f"C12_j{j}_t{t}")
+
+            # max_cpu_time das jobs
+            for t in range(0, self.T - self.max_cpu_time[j]):
+                    model.addCons(quicksum(x[j,t_] for t_ in range(t, t + self.max_cpu_time[j] + 1)) <= self.max_cpu_time[j], f"C13_j{j}_t{t}")
+
+            # min_cpu_time no final do periodo
+            for t in range(self.T - self.min_cpu_time[j] + 1, self.T):
+                    model.addCons(quicksum(x[j,t_] for t_ in range(t, self.T)) >= (self.T - t) * phi[j,t], f"C14_j{j}_t{t}")
+
+        if coupling:
+            soc = {}
+            i = {}
+            b = {}
+            for t in range(self.T):
+                soc[t] = model.addVar(vtype="CONTINUOUS", name="soc(%s)" % t)
+                i[t] = model.addVar(lb=None, vtype="CONTINUOUS", name="i(%s)" % t)
+                b[t] = model.addVar(lb=None, vtype="CONTINUOUS", name="b(%s)" % t)
+
+            ################################
+            # Add power constraints
+            for t in range(self.T):
+                model.addCons(quicksum(self.power_use[j] * x[j,t] for j in range(self.jobs)) <= self.power_resource[t] + self.bat_usage * self.v_bat, f"C15_t{t}")# * (1 - alpha[t]))
+
+            ################################
+            # Bateria
+            ################################
+            for t in range(self.T):
+                model.addCons(quicksum(self.power_use[j] * x[j,t] for j in range(self.jobs)) + b[t] == self.power_resource[t], f"C16_t{t}")
+
+            # Define the i_t, SoC_t constraints in Gurobi
+            for t in range(self.T):
+                # P = V * I 
+                model.addCons(b[t] / self.v_bat >= i[t], f"C17_t{t}")
+
+                if t == 0:
+                    # SoC(1) = SoC(0) + p_carga[1]/60
+                    model.addCons(soc[t] == self.initial_soc + (self.ef / self.q) * (i[t] / 60), f"C18_t{t}")
+                else:
+                    # SoC(t) = SoC(t-1) + (ef / Q) * I(t)
+                    model.addCons(soc[t] == soc[t - 1] + (self.ef / self.q) * (i[t] / 60), f"C19_t{t}")
+
+                # Set the lower and upper limits on SoC
+                model.addCons(self.lower_limit <= soc[t], f"C20_t{t}")
+                model.addCons(soc[t] <= 1, f"C21_t{t}")
+
+        if new_inequalities:
+            # first
+            for j in range(self.jobs):
+                for t in range(self.T):
+                    model.addCons(
+                        quicksum(phi[j, t_] for t_ in range(
+                            t,
+                            min(self.T, t + self.min_cpu_time[j] + 1)
+                        )) <= 1,
+                        name=f"VI_min_CPU_TIME_phi({j},{t})"
+                    )
+
+            # third
+            for j in range(self.jobs):
+                model.addCons(
+                    quicksum(x[j, t] for t in range(self.T)) <=
+                        self.max_cpu_time[j] * quicksum(
+                            phi[j, t] for t in range(self.T)
+                        ),
+                    name = f"VI_max_cpu_time_2({j})"
+                )
+
+            # fourth
+            for j in range(self.jobs):
+                for t in range(0, self.T - self.max_cpu_time[j], 1):
+                    model.addCons(
+                        quicksum(x[j, t_] for t_ in range(
+                                t, t + self.max_cpu_time[j], 1
+                            )) <= self.max_cpu_time[j] * quicksum(
+                                phi[j, t_] for t_ in range(
+                                    max(t - self.max_cpu_time[j] + 1,0),
+                                    t + self.max_cpu_time[j],
+                                    1,
+                                )
+                            ),
+                        name = f"VI_max_cpu_time_3({j},{t})"
+                    )
+
+            # fifth
+            for j in range(self.jobs):
+                for t in range(0, self.T - self.min_job_period[j] + 1):
+                    model.addCons(quicksum(x[j, t_] for t_ in range(t, t + self.min_job_period[j])) <= self.min_job_period[j],
+                                    name = f"VI_min_period_btw_jobs_2({j},{t})")
+
+            # sixth
+            for j in range(self.jobs):
+                if self.max_cpu_time[j] < (self.max_job_period[j] - self.min_cpu_time[j]):
+                    for t in range(0, self.T - self.max_cpu_time[j]):
+                        model.addCons(phi[j,t] + x[j, t + self.max_cpu_time[j]] <= 1,
+                                    name=f"VI_max_period_btw_jobs({j},{t})")
+
+        return model
+
+    def to_graph(self, model: gurobipy.Model = None, **model_kwargs) -> dgl.DGLHeteroGraph:
+        if model is None:
+            model = self.to_gurobipy(**model_kwargs)
+
+        # TODO: include variable bounds (not present in getA())
+        A = model.getA().toarray()
+        # TODO: include sos variable constraints
+        b = np.array(model.getAttr('rhs'))
+        c = np.array(model.getAttr('obj'))
+
+        # get only real (non-null) edges
+        A_ = A.flatten()
+        edges = np.indices(A.shape)  # cons -> vars
+        edges = edges.reshape(edges.shape[0],-1)
+        edges = edges[:,A_ != 0]
+        # edges = torch.from_numpy(edges)
+
+        edge_weights = A_[A_ != 0]
+
+        constraints_sense = np.array([ci.sense for ci in model.getConstrs()])
+        constraints_sense = np.array(list(map({'>': 1, '=': 0, '<': -1}.__getitem__, constraints_sense)))
+
+        vars_names = [v.getAttr(GRB.Attr.VarName) for v in model.getVars()]
+        # grab all non-decision variables (everything that is not `x` or `phi`)
+        soc_vars_mask = np.array([('x(' not in v) and ('phi(' not in v) and ('zeta(' not in v) for v in vars_names])
+        soc_vars = np.arange(soc_vars_mask.shape[0])[soc_vars_mask]
+        var_vars = np.arange(soc_vars_mask.shape[0])[~soc_vars_mask]
+        soc_edges_mask = np.isin(edges.T[:,1], soc_vars)
+
+        var_edges = edges[:,~soc_edges_mask]
+        soc_edges = edges[:,soc_edges_mask]
+
+        # translate soc/var nodes index to 0-based
+        soc_edges[1] = np.array(list(map(
+            dict(zip(soc_vars, np.arange(soc_vars.shape[0]))).get,
+            soc_edges[1]
+        )))
+        var_edges[1] = np.array(list(map(
+            dict(zip(var_vars, np.arange(var_vars.shape[0]))).get,
+            var_edges[1]
+        )))
+
+        g = dgl.heterograph({
+            ('var', 'v2c', 'con'): (var_edges[1], var_edges[0]),
+            ('con', 'c2v', 'var'): (var_edges[0], var_edges[1]),
+            ('soc', 's2c', 'con'): (soc_edges[1], soc_edges[0]),
+            ('con', 'c2s', 'soc'): (soc_edges[0], soc_edges[1]),
+        })
+
+        soc_edge_weights = edge_weights[soc_edges_mask]
+        g.edges['s2c'].data['A'] = torch.from_numpy(soc_edge_weights)
+        g.edges['c2s'].data['A'] = torch.from_numpy(soc_edge_weights)
+
+        var_edge_weights = edge_weights[~soc_edges_mask]
+        g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_weights)
+        g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_weights)
+
+        g.nodes['con'].data['x'] = torch.from_numpy(np.stack((
+            b,  # rhs
+            A.mean(1),  # c_coeff
+            g.in_degrees(etype='v2c').numpy() + \
+            g.in_degrees(etype='s2c').numpy(),  # Nc_coeff
+            constraints_sense,  # sense
+        ), -1))
+
+        g.nodes['var'].data['x'] = torch.from_numpy(np.stack((
+            c[~soc_vars_mask],  # obj
+            A.mean(0)[~soc_vars_mask],  # v_coeff
+            g.in_degrees(etype='c2v').numpy(),  # Nv_coeff
+            A.max(0)[~soc_vars_mask],  # max_coeff
+            A.min(0)[~soc_vars_mask],  # min_coeff
+            np.ones_like(c[~soc_vars_mask]),  # int
+            np.array([float(v.rstrip(')').split(',')[-1]) / 97 for v in np.array(vars_names)[~soc_vars_mask]]),  # pos_emb (kind of)
+        ), -1))
+
+        g.nodes['soc'].data['x'] = torch.from_numpy(np.stack((
+            c[soc_vars_mask],  # obj
+            A.mean(0)[soc_vars_mask],  # v_coeff
+            g.in_degrees(etype='c2s').numpy(),  # Nv_coeff
+            A.max(0)[soc_vars_mask],  # max_coeff
+            A.min(0)[soc_vars_mask],  # min_coeff
+            np.zeros_like(c[soc_vars_mask]),  # int
+        ), -1))
+
+        return g
 
 class PrimalDualIntegralHandler(Eventhdlr):
     def __init__(self, eventtypes=[SCIP_EVENTTYPE.NODESOLVED, SCIP_EVENTTYPE.BESTSOLFOUND],
@@ -336,193 +602,6 @@ class ModelWithPrimalDualIntegral(Model):
     
     def get_primal_curve(self):
         return self.primal_dual_handler.primals, self.primal_dual_handler.times
-
-def get_model_scip(instance, coupling=True, recurso=None, new_ineq=False,
-                   timeout=60, enable_primal_dual_integral=True):
-    if isinstance(instance, str) or isinstance(instance, Path):
-        with open(instance) as f:
-            instance = json.load(f)
-    
-    jobs = list(range(instance['jobs']))
-
-    colunas_ = []
-    lb = 0
-    # T = instance['tamanho'][0]
-    T = instance['T']
-
-    if recurso is None:
-        recurso_p = instance['power_resource']  # this was a typo while generating the instances
-    else:
-        recurso_p = recurso
-    # print(recurso_p)
-
-    priority = instance['priority'] # prioridade de cada tarefa
-    uso_p = instance['power_use'] # recurso utilizado por cada tarefa
-    min_statup = instance['min_startup'] # tempo mínimo de vezes que uma tarefa pode iniciar
-    max_statup = instance['max_startup'] # tempo máximo de vezes que uma tarefa pode iniciar
-    min_cpu_time = instance['min_cpu_time'] # tempo mínimo de unidades de tempo que uma tarefa pode consumir em sequência
-    max_cpu_time = instance['max_cpu_time'] # tempo máximo de unidades de tempo que uma tarefa pode consumir em sequência
-    min_periodo_job = instance['min_job_period'] # tempo mínimo que uma tarefa deve esperar para se repetir
-    max_periodo_job = instance['max_job_period'] # tempo máximo que uma tarefa pode esperar para se repetir
-    win_min = instance['win_min']
-    win_max = instance['win_max']
-
-    # create a model
-    if enable_primal_dual_integral:
-        model = ModelWithPrimalDualIntegral()
-    else:
-        model = Model()
-    # model.Params.LogToConsole = 0
-
-    if timeout is not None:
-        model.setParam('limits/time', timeout)
-
-    if isinstance(jobs, list):
-        J_SUBSET = jobs
-    else:
-        J_SUBSET = [jobs]
-
-    # create decision variables
-    x = {}
-    phi = {}
-    for j in J_SUBSET:
-        # the order in which we add the variables matter. I want all variables
-        # associated with a given job to be together,
-        # like x(0,0),...,x(0,T-1),phi(0,0),...phi(0,T-1),x(1,0),...,x(1,T-1),phi(1,0),...
-        for t in range(T):
-                x[j,t] = model.addVar(name="x(%s,%s)" % (j, t), lb=0, ub=1, vtype="BINARY")
-        for t in range(T):
-                phi[j,t] = model.addVar(name="phi(%s,%s)" % (j, t), lb=0, ub=1, vtype="BINARY")
-
-    soc_inicial = 0.7
-    limite_inferior = 0.0
-    ef = 0.9 
-    v_bat = 3.6 
-    q = 5
-    bat_usage = 5
-
-    # set objective
-    model.setObjective(quicksum(priority[j] * x[j,t] for j in J_SUBSET for t in range(T)), "maximize")
-
-    # phi defines startups of jobs
-    for t in range(T):
-        for j in J_SUBSET:
-            if t == 0:
-                    model.addCons(phi[j,t] >= x[j,t] - 0, f"C1_j{j}_t{t}")
-            else:
-                    model.addCons(phi[j,t] >= x[j,t] - x[j,t - 1], f"C2_j{j}_t{t}")
-
-            model.addCons(phi[j,t] <= x[j,t], f"C3_j{j}_t{t}")
-
-            if t == 0:
-                    model.addCons(phi[j,t] <= 2 - x[j,t] - 0, f"C4_j{j}_t{t}")
-            else:
-                    model.addCons(phi[j,t] <= 2 - x[j,t] - x[j,t - 1], f"C5_j{j}_t{t}")
-
-    # minimum and maximum number of startups of a job
-    for j in J_SUBSET:
-        model.addCons(quicksum(phi[j,t] for t in range(T)) >= min_statup[j], f"C6_j{j}")
-        model.addCons(quicksum(phi[j,t] for t in range(T)) <= max_statup[j], f"C7_j{j}")
-
-        ###############################
-        # precisa ajustar
-
-        # execution window
-        model.addCons(quicksum(x[j,t] for t in range(win_min[j])) == 0, f"C8_j{j}")
-        model.addCons(quicksum(x[j,t] for t in range(win_max[j], T)) == 0, f"C9_j{j}")
-
-    for j in J_SUBSET:
-        # minimum period between jobs
-        for t in range(0, T - min_periodo_job[j] + 1):
-            model.addCons(quicksum(phi[j,t_] for t_ in range(t, t + min_periodo_job[j])) <= 1, f"C10_j{j}_t{t}")
-
-        # periodo máximo entre jobs
-        for t in range(0, T - max_periodo_job[j] + 1):
-            model.addCons(quicksum(phi[j,t_] for t_ in range(t, t + max_periodo_job[j])) >= 1, f"C11_j{j}_t{t}")
-
-        # min_cpu_time das jobs
-        for t in range(0, T - min_cpu_time[j] + 1):
-            model.addCons(quicksum(x[j,t_] for t_ in range(t, t + min_cpu_time[j])) >= min_cpu_time[j] * phi[j,t], f"C12_j{j}_t{t}")
-
-        # max_cpu_time das jobs
-        for t in range(0, T - max_cpu_time[j]):
-                model.addCons(quicksum(x[j,t_] for t_ in range(t, t + max_cpu_time[j] + 1)) <= max_cpu_time[j], f"C13_j{j}_t{t}")
-
-        # min_cpu_time no final do periodo
-        for t in range(T - min_cpu_time[j] + 1, T):
-                model.addCons(quicksum(x[j,t_] for t_ in range(t, T)) >= (T - t) * phi[j,t], f"C14_j{j}_t{t}")
-
-    if coupling:
-        soc = {}
-        i = {}
-        b = {}
-        for t in range(T):
-            soc[t] = model.addVar(vtype="CONTINUOUS", name="soc(%s)" % t)
-            i[t] = model.addVar(lb=None, vtype="CONTINUOUS", name="i(%s)" % t)
-            b[t] = model.addVar(lb=None, vtype="CONTINUOUS", name="b(%s)" % t)
-
-        ################################
-        # Add power constraints
-        for t in range(T):
-            model.addCons(quicksum(uso_p[j] * x[j,t] for j in J_SUBSET) <= recurso_p[t] + bat_usage * v_bat, f"C15_t{t}")# * (1 - alpha[t]))
-
-        ################################
-        # Bateria
-        ################################
-        for t in range(T):
-            model.addCons(quicksum(uso_p[j] * x[j,t] for j in J_SUBSET) + b[t] == recurso_p[t], f"C16_t{t}")
-
-        # Define the i_t, SoC_t constraints in Gurobi
-        for t in range(T):
-            # P = V * I 
-            model.addCons(b[t] / v_bat >= i[t], f"C17_t{t}")
-
-            if t == 0:
-                # SoC(1) = SoC(0) + p_carga[1]/60
-                model.addCons(soc[t] == soc_inicial + (ef / q) * (i[t] / 60), f"C18_t{t}")
-            else:
-                # SoC(t) = SoC(t-1) + (ef / Q) * I(t)
-                model.addCons(soc[t] == soc[t - 1] + (ef / q) * (i[t] / 60), f"C19_t{t}")
-
-            # Set the lower and upper limits on SoC
-            model.addCons(limite_inferior <= soc[t], f"C20_t{t}")
-            model.addCons(soc[t] <= 1, f"C21_t{t}")
-
-    if new_ineq:
-        # first
-        for j in J_SUBSET:
-            for t in range(T):
-                model.addCons(quicksum(phi[j, t_] for t_ in range(t, min(T, t + min_cpu_time[j] + 1))) <= 1,
-                              name=f"VI_min_CPU_TIME_phi({j},{t})")
-
-        # third
-        for j in J_SUBSET:
-            model.addCons(quicksum(x[j, t] for t in range(T)) <=
-                                    max_cpu_time[j]*quicksum(phi[j, t]
-                                        for t in range(T)), name=f"VI_max_cpu_time_2({j})")
-        # fourth
-        for j in J_SUBSET:
-            for t in range(0, T - max_cpu_time[j], 1):
-                model.addCons(
-                    quicksum(x[j, t_] for t_ in range(t, t + max_cpu_time[j], 1)) <=
-                        max_cpu_time[j]*quicksum(phi[j, t_] for t_ in range(max(t - max_cpu_time[j] + 1,0), t + max_cpu_time[j], 1)),
-                    name=f"VI_max_cpu_time_3({j},{t})"
-                )
-
-        # fifth
-        for j in J_SUBSET:
-            for t in range(0, T - min_periodo_job[j] + 1):
-                model.addCons(quicksum(x[j, t_] for t_ in range(t, t + min_periodo_job[j])) <= min_periodo_job[j],
-                              name=f"VI_min_period_btw_jobs_2({j},{t})")
-
-        # sixth
-        for j in J_SUBSET:
-            if max_cpu_time[j] < (max_periodo_job[j] - min_cpu_time[j]):
-                for t in range(0, T - max_cpu_time[j]):
-                    model.addCons(phi[j,t] + x[j, t + max_cpu_time[j]] <= 1,
-                                  name=f"VI_max_period_btw_jobs({j},{t})")
-
-    return model
 
 def add_trust_region(model, values: dict(), Delta=15):
     abs_diffs = list()

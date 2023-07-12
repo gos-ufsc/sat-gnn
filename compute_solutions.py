@@ -1,11 +1,9 @@
 from pathlib import Path
 from tqdm import tqdm
 
-import json
-import pickle
 import numpy as np
 
-from src.problem import get_model
+from src.problem import Instance
 
 
 if __name__ == '__main__':
@@ -19,17 +17,16 @@ if __name__ == '__main__':
 
         instances_fps = [f for f in instances_fps if f.name[:-len('.json')] not in solutions]
     except FileNotFoundError:
-        solutions = dict()
+        pass
 
     for fpath in tqdm(instances_fps):
         instance_name = fpath.name[:-len('.json')]
 
-        with open(fpath) as f:
-            instance = json.load(f)
+        instance = Instance.from_file(fpath)
 
-        jobs = list(range(instance['jobs']))
+        jobs = list(range(instance.jobs))
 
-        model = get_model(instance, coupling=True, new_ineq=False, timeout=60)
+        model = instance.to_gurobipy(coupling=True, new_inequalities=True, timeout=60)
         model.setParam('PoolSearchMode', 2)
         model.setParam('PoolSolutions', 500)
         model.update()

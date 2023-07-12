@@ -9,7 +9,7 @@ from time import sleep
 import numpy as np
 from gurobipy import GRB
 
-from src.problem import get_model, random_instance
+from src.problem import Instance
 
 
 def save_instance(tjn, instance, target_dir):
@@ -19,9 +19,9 @@ def save_instance(tjn, instance, target_dir):
         json.dump(instance, f)
 
 def new_feasible_instance_or_none(t, j, timeout=10):
-    instance = random_instance(t, j)
+    instance = Instance.random(t, j)
 
-    model = get_model(instance, new_ineq=True, timeout=timeout)
+    model = instance.to_gurobipy(new_inequalities=True, timeout=timeout)
     model.setObjective(1, GRB.MAXIMIZE)  # we just care about feasibility here
     model.update()
     model.optimize()

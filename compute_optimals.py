@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from tqdm import tqdm
 
@@ -6,7 +5,7 @@ from gurobipy import GRB
 
 import numpy as np
 
-from src.problem import get_model
+from src.problem import Instance
 
 
 if __name__ == '__main__':
@@ -27,12 +26,11 @@ if __name__ == '__main__':
     for fpath in tqdm(instances_fps):
         instance_name = fpath.name[:-len('.json')]
 
-        with open(fpath) as f:
-            instance = json.load(f)
+        instance = Instance.from_file(fpath)
 
-        model = get_model(fpath, coupling=True, new_ineq=True, timeout=300)
+        model = instance.to_gurobipy(coupling=True, new_inequalities=True, timeout=300)
+
         model.update()
-
         model.optimize()
 
         X = np.array([v.X for v in model.getVars()])

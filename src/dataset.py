@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from copy import deepcopy
 from pathlib import Path
 import pickle
-import json
 
 import dgl
 import gurobipy
@@ -10,7 +9,7 @@ import numpy as np
 import torch
 from dgl.data import DGLDataset
 
-from src.problem import get_model, get_model_scip
+from src.problem import Instance
 
 
 def make_graph_from_matrix(A, b, c):
@@ -37,89 +36,6 @@ def make_graph_from_matrix(A, b, c):
 
     g.nodes['var'].data['x'] = torch.from_numpy(c)
     g.nodes['con'].data['x'] = torch.from_numpy(b)
-
-    return g
-
-def make_graph_from_model(model):
-    # TODO: include variable bounds (not present in getA())
-    A = model.getA().toarray()
-    # TODO: include sos variable constraints
-    b = np.array(model.getAttr('rhs'))
-    c = np.array(model.getAttr('obj'))
-
-    # get only real (non-null) edges
-    A_ = A.flatten()
-    edges = np.indices(A.shape)  # cons -> vars
-    edges = edges.reshape(edges.shape[0],-1)
-    edges = edges[:,A_ != 0]
-    # edges = torch.from_numpy(edges)
-
-    edge_weights = A_[A_ != 0]
-
-    constraints_sense = np.array([ci.sense for ci in model.getConstrs()])
-    constraints_sense = np.array(list(map({'>': 1, '=': 0, '<': -1}.__getitem__, constraints_sense)))
-
-    vars_names = [v.getAttr(gurobipy.GRB.Attr.VarName) for v in model.getVars()]
-    # grab all non-decision variables (everything that is not `x` or `phi`)
-    soc_vars_mask = np.array([('x(' not in v) and ('phi(' not in v) and ('zeta(' not in v) for v in vars_names])
-    soc_vars = np.arange(soc_vars_mask.shape[0])[soc_vars_mask]
-    var_vars = np.arange(soc_vars_mask.shape[0])[~soc_vars_mask]
-    soc_edges_mask = np.isin(edges.T[:,1], soc_vars)
-
-    var_edges = edges[:,~soc_edges_mask]
-    soc_edges = edges[:,soc_edges_mask]
-
-    # translate soc/var nodes index to 0-based
-    soc_edges[1] = np.array(list(map(
-        dict(zip(soc_vars, np.arange(soc_vars.shape[0]))).get,
-        soc_edges[1]
-    )))
-    var_edges[1] = np.array(list(map(
-        dict(zip(var_vars, np.arange(var_vars.shape[0]))).get,
-        var_edges[1]
-    )))
-
-    g = dgl.heterograph({
-        ('var', 'v2c', 'con'): (var_edges[1], var_edges[0]),
-        ('con', 'c2v', 'var'): (var_edges[0], var_edges[1]),
-        ('soc', 's2c', 'con'): (soc_edges[1], soc_edges[0]),
-        ('con', 'c2s', 'soc'): (soc_edges[0], soc_edges[1]),
-    })
-
-    soc_edge_weights = edge_weights[soc_edges_mask]
-    g.edges['s2c'].data['A'] = torch.from_numpy(soc_edge_weights)
-    g.edges['c2s'].data['A'] = torch.from_numpy(soc_edge_weights)
-
-    var_edge_weights = edge_weights[~soc_edges_mask]
-    g.edges['v2c'].data['A'] = torch.from_numpy(var_edge_weights)
-    g.edges['c2v'].data['A'] = torch.from_numpy(var_edge_weights)
-
-    g.nodes['con'].data['x'] = torch.from_numpy(np.stack((
-        b,  # rhs
-        A.mean(1),  # c_coeff
-        g.in_degrees(etype='v2c').numpy() + \
-        g.in_degrees(etype='s2c').numpy(),  # Nc_coeff
-        constraints_sense,  # sense
-    ), -1))
-
-    g.nodes['var'].data['x'] = torch.from_numpy(np.stack((
-        c[~soc_vars_mask],  # obj
-        A.mean(0)[~soc_vars_mask],  # v_coeff
-        g.in_degrees(etype='c2v').numpy(),  # Nv_coeff
-        A.max(0)[~soc_vars_mask],  # max_coeff
-        A.min(0)[~soc_vars_mask],  # min_coeff
-        np.ones_like(c[~soc_vars_mask]),  # int
-        np.array([float(v.rstrip(')').split(',')[-1]) / 97 for v in np.array(vars_names)[~soc_vars_mask]]),  # pos_emb (kind of)
-    ), -1))
-
-    g.nodes['soc'].data['x'] = torch.from_numpy(np.stack((
-        c[soc_vars_mask],  # obj
-        A.mean(0)[soc_vars_mask],  # v_coeff
-        g.in_degrees(etype='c2s').numpy(),  # Nv_coeff
-        A.max(0)[soc_vars_mask],  # max_coeff
-        A.min(0)[soc_vars_mask],  # min_coeff
-        np.zeros_like(c[soc_vars_mask]),  # int
-    ), -1))
 
     return g
 
@@ -200,15 +116,9 @@ class GraphDataset(DGLDataset,ABC):
         pass
 
     def load_instance(self, instance_fp):
-        with open(instance_fp) as f:
-            instance = json.load(f)
+        instance = Instance.from_file(instance_fp)
 
-        m = get_model(instance, coupling=True, new_ineq=False)
-        graph = make_graph_from_model(m)
-
-        m = get_model_scip(instance, coupling=True, new_ineq=False)
-
-        return m, graph
+        return instance.to_scip(), instance.to_graph()
 
     def maybe_initialize(self):
         if not self._is_initialized:
@@ -394,11 +304,11 @@ class OptimalsWithZetaDataset(OptimalsDataset):
                          **kwargs)
 
     def load_instance(self, instance_fp):
-        with open(instance_fp) as f:
-            instance = json.load(f)
+        instance = Instance.from_file(instance_fp)
 
-        model = get_model(instance, coupling=True, new_ineq=False)
+        model = instance.to_gurobipy()
 
+        # add zeta variables
         zeta = dict()
         phi = dict()
         x = dict()
@@ -413,9 +323,9 @@ class OptimalsWithZetaDataset(OptimalsDataset):
 
         model.update()
 
-        graph = make_graph_from_model(model)
+        graph = instance.to_graph(model=model)
 
-        m = get_model_scip(instance, coupling=True, new_ineq=False)
+        m = instance.to_scip()
 
         return m, graph
 
@@ -427,11 +337,10 @@ class OptimalsWithZetaDataset(OptimalsDataset):
         _, _, _, sol = sol_npz['arr_0'], sol_npz['arr_1'], sol_npz['arr_2'], sol_npz['arr_3']
 
         # compute zeta target
-        with open(instance_fp) as f:
-            instance = json.load(f)
+        instance = Instance.from_file(instance_fp)
 
-        T = instance['T']
-        J = instance['jobs']
+        T = instance.T
+        J = instance.jobs
 
         s = sol.reshape((J, 2*T))
         x = s[:,:T]
