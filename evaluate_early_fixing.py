@@ -74,14 +74,15 @@ def evaluate_early_fixing(model, reference_objective, fixed_vars: dict = None,
 
 if __name__ == '__main__':
     model_run_id = sys.argv[-1]
-    N = [0, 50, 200, 500, 1000]
+    N = [0, 200, 500, 1000]
     # time_budget = 10*60  # 10 minutes
-    time_budget = 30  # 30 seconds
+    time_budget = 2*60  # 2 minutes
+    # time_budget = 30  # 30 seconds
 
     assert len(model_run_id) == 8, 'a proper wandb run id was not provided'
 
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
-    instances_fpaths = list(instances_dir.glob('97_24_*.json'))
+    instances_fpaths = list(instances_dir.glob('97_*.json'))
 
     # restore model
     net = InstanceGCN(readout_op=None)  # TODO: initialize net following run's config
@@ -112,7 +113,6 @@ if __name__ == '__main__':
     )
     # ds = OptimalsWithZetaDataset(instances_fpaths, split='val', return_model=True)
 
-    _skip = False
     for graph, model in dataset:
         quasi_optimal_objective = graph.ndata['w']['var'][0].max().item()
 
