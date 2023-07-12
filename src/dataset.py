@@ -96,12 +96,12 @@ class GraphDataset(DGLDataset,ABC):
 
             self.targets.append(target)
 
-            model, graph = self.load_instance(instance_fp)
+            instance = Instance.from_file(instance_fp)
+
+            self.gs.append(self.load_graph(instance))
 
             if return_model:
-                models.append(model)
-
-            self.gs.append(graph)
+                models.append(instance.to_scip())
 
         if return_model:
             self.models = models
@@ -115,10 +115,8 @@ class GraphDataset(DGLDataset,ABC):
     def load_target(self, instance_fp, sols_dir):
         pass
 
-    def load_instance(self, instance_fp):
-        instance = Instance.from_file(instance_fp)
-
-        return instance.to_scip(), instance.to_graph()
+    def load_graph(self, instance: Instance):
+        return instance.to_graph()
 
     def maybe_initialize(self):
         if not self._is_initialized:
@@ -303,9 +301,7 @@ class OptimalsWithZetaDataset(OptimalsDataset):
         super().__init__(instances_fpaths, sols_dir, name, split, return_model,
                          **kwargs)
 
-    def load_instance(self, instance_fp):
-        instance = Instance.from_file(instance_fp)
-
+    def load_graph(self, instance):
         model = instance.to_gurobipy()
 
         # add zeta variables
@@ -323,11 +319,7 @@ class OptimalsWithZetaDataset(OptimalsDataset):
 
         model.update()
 
-        graph = instance.to_graph(model=model)
-
-        m = instance.to_scip()
-
-        return m, graph
+        return instance.to_graph(model=model)
 
     def load_target(self, instance_fp, sols_dir):
         sol_fp = sols_dir/instance_fp.name.replace('.json', '_opt.npz')
