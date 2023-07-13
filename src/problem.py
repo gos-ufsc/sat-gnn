@@ -559,7 +559,7 @@ class PrimalDualIntegralHandler(Eventhdlr):
             pass
 
     def get_primal_dual_integral(self):
-        sense = 1 if self.model.getObjectiveSense() == 'minimze' else -1
+        sense = 1 if self.model.getObjectiveSense() == 'minimize' else -1
         last_time = self.model.getTotalTime()
 
         times_ = self.times + [last_time,]

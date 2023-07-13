@@ -4,6 +4,8 @@ from time import time
 import torch
 import torch.nn as nn
 import wandb
+import numpy as np
+import pandas as pd
 
 
 def timeit(fun):
@@ -34,3 +36,19 @@ def debugger_is_active() -> bool:
     """
     gettrace = getattr(sys, 'gettrace', lambda : None) 
     return gettrace() is not None
+
+def normalize_curve(curve, T=120, timestep=1e-3):
+    standard_range = pd.to_timedelta(np.linspace(0,T,int(T/timestep) +1), 's')
+
+    if np.isnan(curve).any():
+        return np.nan
+    else:
+        c = pd.Series(curve[0], index=pd.to_timedelta(curve[1], 's'))
+        c = c.reindex(standard_range, method='ffill')
+        return c.values
+
+def compute_integral(curve, T=120, timestep=1e-3):
+    if np.isnan(curve).any():
+        return np.nan
+    else:
+        return T - timestep * curve.sum()
