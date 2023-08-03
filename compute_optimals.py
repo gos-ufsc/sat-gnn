@@ -9,11 +9,9 @@ from src.problem import Instance
 
 
 if __name__ == '__main__':
-    instances_fps = list(Path('data/raw').glob('97_*.json'))
+    instances_fps = list(Path('data/raw').glob('120_*.json'))
 
     dst_dir = Path('data/interim')
-
-    dst_fpath = f'97_opts.pkl'
 
     try:
         solutions_fpaths = dst_dir.glob('*_opt.npz')
@@ -32,6 +30,10 @@ if __name__ == '__main__':
 
         model.update()
         model.optimize()
+
+        if model.Status == 3:
+            print('INFEASIBLE ', fpath)
+            continue
 
         X = np.array([v.X for v in model.getVars()])
         model_vars = np.core.defchararray.array([v.getAttr(GRB.Attr.VarName) for v in model.getVars()])

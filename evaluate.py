@@ -43,7 +43,7 @@ if __name__ == '__main__':
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
     instances_fpaths = list()
     for i in range(60, 80):  # VALIDATION
-        instances_fpaths += sorted(list(instances_dir.glob('97_*_'+str(i)+'.json')))
+        instances_fpaths += sorted(list(instances_dir.glob('120_2*_'+str(i)+'.json')))
 
     run = wandb.init(project='sat-gnn', job_type=evaluation_name+'-eval')
     run.config['model_run_id'] = net_run_id
