@@ -524,6 +524,10 @@ class Instance:
 
         return g
 
+    def to_json(self, fp):
+        with open(fp, 'w') as f:
+            json.dump(self, f, default=lambda o: o.__dict__)
+
 class PrimalDualIntegralHandler(Eventhdlr):
     def __init__(self, eventtypes=[SCIP_EVENTTYPE.NODESOLVED, SCIP_EVENTTYPE.BESTSOLFOUND],
                  initial_primal=0, initial_dual=1e5):

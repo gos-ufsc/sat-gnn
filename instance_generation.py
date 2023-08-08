@@ -12,11 +12,9 @@ from gurobipy import GRB
 from src.problem import Instance
 
 
-def save_instance(tjn, instance, target_dir):
+def save_instance(tjn, instance: Instance, target_dir):
     instance_fp = target_dir/("%d_%d_%d.json" % tjn)
-
-    with open(instance_fp, 'w') as f:
-        json.dump(instance, f)
+    instance.to_json(instance_fp)
 
 def new_feasible_instance_or_none(t, j, timeout=10):
     instance = Instance.random(t, j)
@@ -94,8 +92,8 @@ if __name__ == '__main__':
     new_instances = dict()
     tjs = list()
     ns = list()
-    for tj in [(t, j) for t in [97, 120, 125, 154, 170, 194, 291]
-                      for j in [9, 18, 20, 22, 24]]:
+    for tj in [(t, j) for t in [125,]
+                      for j in [9,]]:
         n = len(list(target_dir.glob("%d_%d_*.json" % tj)))
 
         if n < 100:
