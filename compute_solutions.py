@@ -1,3 +1,5 @@
+import sys
+
 from pathlib import Path
 from tqdm import tqdm
 
@@ -7,7 +9,12 @@ from src.problem import Instance
 
 
 if __name__ == '__main__':
-    instances_fps = list(Path('data/raw').glob('97_*.json'))
+    if len(sys.argv) < 2:
+        glob_str = '97_*'  # default
+    else:
+        glob_str = sys.argv[1]
+
+    instances_fps = list(Path('data/raw').glob(glob_str+'.json'))
 
     dst_dir = Path('data/interim')
 
