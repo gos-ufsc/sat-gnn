@@ -43,7 +43,9 @@ if __name__ == '__main__':
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
     instances_fpaths = list()
     for i in range(60, 80):  # VALIDATION
-        instances_fpaths += sorted(list(instances_dir.glob('120_2*_'+str(i)+'.json')))
+        instances_fpaths += sorted(list(instances_dir.glob('125_2*_'+str(i)+'.json')))
+
+    instances_fpaths = [fp for fp in instances_fpaths if not (results_dir/(f"{net_run_id}_{evaluation}_{n}_{net_run_id}_"+fp.name)).exists()]
 
     run = wandb.init(project='sat-gnn', job_type=evaluation_name+'-eval')
     run.config['model_run_id'] = net_run_id
@@ -64,7 +66,7 @@ if __name__ == '__main__':
 
         result = solver.solve(instance)
 
-        result_fpath = results_dir/(f"{evaluation}_{n}_"+instance_fpath.name)
+        result_fpath = results_dir/(f"{net_run_id}_{evaluation}_{n}_20s_"+instance_fpath.name)
         with open(result_fpath, 'w') as f:
             json.dump(asdict(result), f)
 
