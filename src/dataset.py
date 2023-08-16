@@ -49,7 +49,7 @@ class LazyGraphs:
     def __getitem__(self, idx):
         i = int(self.idxs[idx])
         return dgl.load_graphs(self._fpath, [i])[0][0]
-    
+
     def __len__(self):
         return len(self.idxs)
 
@@ -72,7 +72,7 @@ class GraphDataset(DGLDataset,ABC):
 
     def initialize(self, instances_fpaths, sols_dir, return_model=False):
         """Populates whatever is necessary for getitem and len."""
-        i_range = torch.arange(150)
+        i_range = torch.arange(len(instances_fpaths))
         if self.split.lower() == 'train':
             i_range = i_range[:60]
         elif self.split.lower() == 'val':
@@ -208,16 +208,17 @@ class GraphDataset(DGLDataset,ABC):
 
         # re-split keeping lazyness
         if split is not None:
-            i_range = torch.arange(150)
-            if self.split.lower() == 'train':
+            instances_fpaths = meta['kwargs']['instances_fpaths']
+
+            i_range = torch.arange(len(instances_fpaths))
+            if split.lower() == 'train':
                 i_range = i_range[:60]
-            elif self.split.lower() == 'val':
+            elif split.lower() == 'val':
                 i_range = i_range[60:80]
-            elif self.split.lower() == 'test':
+            elif split.lower() == 'test':
                 i_range = i_range[80:]
             
             # filter
-            instances_fpaths = meta['kwargs']['instances_fpaths']
             split_mask = list()
             for ifp in instances_fpaths:
                 i = int(ifp.name[:-len('.json')].split('_')[-1])
@@ -227,7 +228,7 @@ class GraphDataset(DGLDataset,ABC):
             split_mask = np.ones(len(meta['targets'])).astype(bool)
             split_idxs = np.arange(len(meta['targets']))
 
-        self = cls(**meta['kwargs'], split=meta['kwargs'])
+        self = cls(**meta['kwargs'], split=split)
         self.targets = [target for target, m in zip(meta['targets'], split_mask) if m]
 
         try:
