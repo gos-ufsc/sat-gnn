@@ -103,6 +103,43 @@ class Instance:
             win_max=win_max.tolist(),
         )
 
+    @property
+    def vars_names(self):
+        if hasattr(self, '_vars_names'):
+            return self._vars_names
+        else:
+            model = self.to_gurobipy()
+
+            vars_names = np.core.defchararray.array([v.VarName for v in model.getVars()])
+            vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
+            self._vars_names = vars_names
+
+            return self.vars_names
+
+    def add_phi_to_candidate(self, candidate: dict):
+        X = np.zeros((self.jobs, self.T), dtype='uint8')
+        for var_name, var_x in candidate.items():
+            j, t = re.fullmatch(r"x\((\d+),(\d+)\)", var_name).groups()
+            j = int(j)
+            t = int(t)
+            X[j,t] = np.round(var_x)
+
+        Phi = X.copy()
+        Phi[:,1:] = np.where(X[:,1:] - X[:,:-1] != 0, X[:,1:], np.zeros_like(X[:,1:]))
+
+        full_candidate = dict()
+        for var_name in self.vars_names:
+            var, j, t = re.fullmatch(r"(x|phi)\((\d+),(\d+)\)", var_name).groups()
+            j = int(j)
+            t = int(t)
+
+            if var == 'x':
+                full_candidate[var_name] = X[j,t]
+            elif var == 'phi':
+                full_candidate[var_name] = Phi[j,t]
+
+        return full_candidate
+
     def to_gurobipy(self, coupling=True, new_inequalities=False, timeout=60) -> gurobipy.Model:
         # create blank model
         model = gurobipy.Model()
@@ -526,7 +563,44 @@ class Instance:
 
     def to_json(self, fp):
         with open(fp, 'w') as f:
-            json.dump(self, f, default=lambda o: o.__dict__)
+            json.dump(self, f, default=lambda o: {k:v for k,v in o.__dict__.items()
+                                                  if k != '_vars_names'})
+
+    def is_solution_feasible(self, candidate: dict):
+        """`candidate` must be a dict from var name to value.
+        """
+        model = self.to_scip(coupling=True, new_inequalities=True,
+                             enable_primal_dual_integral=False)
+        model.hideOutput()
+
+        model.setObjective(1, "maximize")
+
+        return self._fix_vars_and_solve(model, candidate)
+
+    def _fix_vars_and_solve(self, model: Model, candidate: dict):
+        for var in model.getVars():
+            try:
+                value = candidate[var.name]
+                model.fixVar(var, value)
+            except KeyError:
+                pass
+
+        model.optimize()
+
+        return model.getStatus().lower() == 'optimal'
+
+    def new_random_solution(self) -> dict:
+        model = self.to_gurobipy()
+
+        vars_names = np.core.defchararray.array([v.VarName for v in model.getVars()])
+        vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
+
+        random_solution = np.random.randint(0, 2, len(vars_names))
+
+        candidate = dict(zip(vars_names, random_solution))
+
+        return candidate
+        
 
 class PrimalDualIntegralHandler(Eventhdlr):
     def __init__(self, eventtypes=[SCIP_EVENTTYPE.NODESOLVED, SCIP_EVENTTYPE.BESTSOLFOUND],
