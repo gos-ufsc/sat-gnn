@@ -10,13 +10,13 @@ from src.problem import Instance
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        glob_str = '97_*'  # default
+        glob_str = '*'  # default
     else:
         glob_str = sys.argv[1]
 
-    instances_fps = list(Path('data/raw').glob(glob_str+'.json'))
+    instances_fps = list(Path('data/raw/').glob(glob_str+'.json'))
 
-    dst_dir = Path('data/interim')
+    dst_dir = Path('data/interim/')
 
     try:
         solutions_fpaths = dst_dir.glob('*_sols.npz')
@@ -33,12 +33,23 @@ if __name__ == '__main__':
 
         jobs = list(range(instance.jobs))
 
-        model = instance.to_gurobipy(coupling=True, new_inequalities=True, timeout=60)
+        model = instance.to_gurobipy(coupling=True, new_inequalities=True, timeout=300)
         model.setParam('PoolSearchMode', 2)
         model.setParam('PoolSolutions', 500)
         model.update()
 
         model.optimize()
+
+        # save best solution found
+        X = np.array([v.X for v in model.getVars()])
+        model_vars = np.core.defchararray.array([v.VarName for v in model.getVars()])
+        X = X[(model_vars.find('x') >= 0) | (model_vars.find('phi') >= 0)]
+
+        obj = model.ObjVal
+        gap = model.MIPGap
+        runtime = model.Runtime
+
+        np.savez(dst_dir/(instance_name + '_opt.npz'), obj, gap, runtime, X)
 
         objs = list()
         sols = list()
