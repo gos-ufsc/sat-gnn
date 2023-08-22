@@ -2,11 +2,13 @@ from abc import ABC, abstractmethod
 from copy import deepcopy
 from pathlib import Path
 import pickle
+from typing import List
 
 import dgl
 import gurobipy
 import numpy as np
 import torch
+from pyscipopt import Model
 from dgl.data import DGLDataset
 
 from src.problem import Instance
@@ -40,23 +42,23 @@ def make_graph_from_matrix(A, b, c):
     return g
 
 class LazyGraphs:
-    def __init__(self, fpath, idxs):
+    def __init__(self, fpath):
         assert Path(fpath).exists()
 
         self._fpath = fpath
-        self.idxs = idxs
 
     def __getitem__(self, idx):
-        i = int(self.idxs[idx])
-        return dgl.load_graphs(self._fpath, [i])[0][0]
+        return dgl.load_graphs(self._fpath, [idx])[0][0]
 
     def __len__(self):
-        return len(self.idxs)
+        with open(self._fpath+'.pkl', 'rb') as f:
+            m = pickle.load(f)
+        return len(m['targets'])
 
 class GraphDataset(DGLDataset,ABC):
     def __init__(self, instances_fpaths,
                  sols_dir='/home/bruno/sat-gnn/data/interim',
-                 name='Graph Dataset', split='train', return_model=False,
+                 name='Graph Dataset', return_model=False,
                  **kwargs):
         super().__init__(name, **kwargs)
 
@@ -64,30 +66,19 @@ class GraphDataset(DGLDataset,ABC):
         assert sols_dir.exists()
 
         # necessary for re-splitting
-        self._own_kwargs = dict(instances_fpaths=sorted(instances_fpaths), sols_dir=sols_dir, return_model=return_model, **kwargs)
-        self.split = split
+        self._own_kwargs = dict(instances_fpaths=sorted(instances_fpaths),
+                                sols_dir=sols_dir, return_model=return_model,
+                                **kwargs)
 
         self._is_initialized = False
         self._lazy = False
 
     def initialize(self, instances_fpaths, sols_dir, return_model=False):
         """Populates whatever is necessary for getitem and len."""
-        i_range = torch.arange(len(instances_fpaths))
-        if self.split.lower() == 'train':
-            i_range = i_range[:60]
-        elif self.split.lower() == 'val':
-            i_range = i_range[60:80]
-        elif self.split.lower() == 'test':
-            i_range = i_range[80:]
-
         models = list()
         self.targets = list()
         self.gs = list()
         for instance_fp in sorted(instances_fpaths):
-            i = int(instance_fp.name[:-len('.json')].split('_')[-1])
-            if i not in i_range:  # instance is not part of the split
-                continue
-
             try:
                 target = self.load_target(instance_fp, sols_dir)
             except AssertionError:
@@ -147,49 +138,11 @@ class GraphDataset(DGLDataset,ABC):
         self.maybe_initialize()
         return self.len()
 
-    def get_split(self, split):
-        if self._lazy:
-            new_self = deepcopy(self)
-
-            i_range = torch.arange(150)
-            if split.lower() == 'train':
-                i_range = i_range[:60]
-            elif split.lower() == 'val':
-                i_range = i_range[60:80]
-            elif split.lower() == 'test':
-                i_range = i_range[80:]
-
-            # filter
-            instances_fpaths = self._own_kwargs['instances_fpaths']
-            split_mask = list()
-            for ifp in instances_fpaths:
-                i = int(ifp.name[:-len('.json')].split('_')[-1])
-                split_mask.append(i in i_range)
-            split_idxs = np.where(split_mask)[0]
-
-            new_self.gs.idxs = split_idxs
-            new_self.targets = [target for target, m in zip(self.targets, split_mask) if m]
-            try:
-                new_self.models = [model for model, m in zip(self.models, split_mask) if m]
-            except AttributeError:
-                pass
-
-            new_self.split = split
-
-            return new_self
-        else:
-            return type(self)(**self._own_kwargs, split=split)
-
     def save_dataset(self, fpath):
-        assert self.split == 'all'
-
+        self.maybe_initialize()
         dgl.save_graphs(fpath, self.gs)
 
-        meta = {
-            'targets': self.targets,
-            'kwargs': self._own_kwargs,
-            'split': self.split,
-        }
+        meta = self._get_metadata_for_saving()
 
         try:
             meta['models'] = self.models
@@ -200,55 +153,202 @@ class GraphDataset(DGLDataset,ABC):
         with open(meta_fpath, 'wb') as f:
             pickle.dump(meta, f)
 
+    def _get_metadata_for_saving(self):
+        meta = {
+            'targets': self.targets,
+            'kwargs': self._own_kwargs,
+        }
+        
+        return meta
+    
     @classmethod
-    def from_file_lazy(cls, fpath, split=None):
+    def _make_self_from_meta(cls, meta):
+        self = cls(**meta['kwargs'])
+
+        for k, v in meta.items():
+            if k is not 'kwargs':
+                setattr(self, k, v)
+
+        return self
+
+    @classmethod
+    def from_file_lazy(cls, fpath):
         meta_fpath = str(fpath) + '.pkl'
         with open(meta_fpath, 'rb') as f:
             meta = pickle.load(f)
 
-        # re-split keeping lazyness
-        if split is not None:
-            instances_fpaths = meta['kwargs']['instances_fpaths']
+        self = cls._make_self_from_meta(meta)
 
-            i_range = torch.arange(len(instances_fpaths))
-            if split.lower() == 'train':
-                i_range = i_range[:60]
-            elif split.lower() == 'val':
-                i_range = i_range[60:80]
-            elif split.lower() == 'test':
-                i_range = i_range[80:]
-            
-            # filter
-            split_mask = list()
-            for ifp in instances_fpaths:
-                i = int(ifp.name[:-len('.json')].split('_')[-1])
-                split_mask.append(i in i_range)
-            split_idxs = np.where(split_mask)[0]
-        else:
-            split_mask = np.ones(len(meta['targets'])).astype(bool)
-            split_idxs = np.arange(len(meta['targets']))
-
-        self = cls(**meta['kwargs'], split=split)
-        self.targets = [target for target, m in zip(meta['targets'], split_mask) if m]
-
-        try:
-            self.models = [model for model, m in zip(meta['models'], split_mask) if m]
-        except KeyError:
-            pass
-
-        self.gs = LazyGraphs(fpath, idxs=split_idxs)
+        self.gs = LazyGraphs(fpath)
 
         self._is_initialized = True
         self._lazy = True
 
         return self
 
+class SolutionFeasibilityDataset(GraphDataset):
+    def __init__(self, instances_fpaths,
+                 sols_dir='/home/bruno/sat-gnn/data/interim', n_random=250,
+                 n_dirty=250, noise_size=2, name='Solution Feasibility Dataset',
+                 return_model=False, skip_feasibility_check=False, **kwargs):
+        super().__init__(instances_fpaths, sols_dir, name, return_model, **kwargs)
+
+        self.n_random = n_random
+        self.n_dirty = n_dirty
+        self.noise_size = noise_size
+        self.skip_feasibility_check = skip_feasibility_check
+
+    def load_target(self, instance_fp, sols_dir):
+        sol_fp = sols_dir/instance_fp.name.replace('.json', '_sols.npz')
+
+        sol_npz = np.load(sol_fp)
+        sols = np.rint(sol_npz['arr_0']).astype('uint8')
+
+        return sols
+
+    def _dirty_candidates_from_sols(self, X_sols: np.ndarray, instance: Instance):
+        X = X_sols[np.random.choice(np.arange(X_sols.shape[0]), self.n_dirty, replace=True)]
+
+        X[:,instance.vars_names.find('x(') >= 0] # add noise only to `x_jt` variables
+
+        if self.noise_size == 1:
+            noise = np.eye(X.shape[1])[np.random.choice(np.arange(X.shape[1]))]
+        else:
+            p = self.noise_size / X.shape[1]
+            noise = np.random.choice([False, True], size=X.shape, p=[1-p, p])
+
+        X = np.where(noise, 1 - X, X)  # dirty X
+
+        candidates = list()
+        for x in X:
+            candidate = dict(
+                zip(instance.vars_names[instance.vars_names.find('x(') >= 0], x)
+            )
+            candidates.append(instance.add_phi_to_candidate(candidate))
+
+        return candidates
+
+    def _check_feasibility_get_y(self, candidates: List[dict],
+                                  instance: Instance):
+        src_model = instance.to_scip(coupling=True, new_inequalities=True,
+                                     enable_primal_dual_integral=False)
+        src_model.setObjective(1, "maximize")
+        src_model.hideOutput()
+
+        y = list()
+        X = list()
+        for candidate in candidates:
+            model = Model(sourceModel=src_model)
+
+            for var in model.getVars():
+                try:
+                    value = candidate[var.name]
+                    model.fixVar(var, value)
+                except KeyError:
+                    pass
+
+            model.optimize()
+
+            y.append(int(model.getStatus().lower() == 'optimal'))
+
+        return np.array(y)
+
+    def initialize(self, instances_fpaths, sols_dir, return_model=False):
+        """Populates whatever is necessary for getitem and len."""
+        models = list()
+        self.targets = list()
+        self.inputs = list()
+        self.gs = list()
+        for instance_fp in sorted(instances_fpaths):
+            instance = Instance.from_file(instance_fp)
+
+            try:
+                X_sols = self.load_target(instance_fp, sols_dir)
+            except AssertionError:
+                print('solutions were not computed for ', instance_fp)
+                continue
+            y_sols = np.ones(len(X_sols), dtype='uint8')
+
+            dirty_candidates = self._dirty_candidates_from_sols(
+                X_sols,
+                instance
+            )
+            X_dirty = np.stack([np.array([candidate[v] for v in instance.vars_names])
+                                for candidate in dirty_candidates])
+            y_dirty = self._check_feasibility_get_y(
+                dirty_candidates,
+                instance,
+            )
+
+            X_random = np.random.choice([0,1], (self.n_random, X_sols.shape[1]))
+            random_candidates = [dict(zip(instance.vars_names, x))
+                                 for x in X_random]
+            y_random = self._check_feasibility_get_y(
+                random_candidates,
+                instance,
+            )
+
+            X = np.vstack([X_sols, X_dirty, X_random])
+            y = np.hstack([y_sols, y_dirty, y_random])
+
+            # multiple references to the same graph
+            g = self.load_graph(instance)
+            for _ in range(X.shape[0]):
+                self.gs.append(g)
+
+            self.targets += y.tolist()
+            self.inputs += X.tolist()
+
+            if return_model:
+                models.append(instance.to_scip())
+
+        if return_model:
+            self.models = models
+        else:
+            del models
+
+        self._is_initialized = True
+        self._lazy = False
+
+    def getitem(self, idx):
+        g = self.gs[idx]
+        x = self.inputs[idx]
+        y = self.targets[idx]
+
+        g = self.add_input_to_graph(g, x)
+
+        try:
+            m = self.models[idx]
+            return g, y, m
+        except AttributeError:
+            return g, y
+
+    def add_input_to_graph(self, g, x):
+        if not self._lazy:
+            g = deepcopy(g)
+
+        g.ndata['x']['var'] = torch.hstack([
+            g.ndata['x']['var'],
+            torch.from_numpy(x).to(g.ndata['x']['var']).unsqueeze(1)
+        ])
+
+        return g
+
+    def _get_metadata_for_saving(self):
+        meta = {
+            'targets': self.targets,
+            'inputs': self.inputs,
+            'kwargs': self._own_kwargs,
+        }
+
+        return meta
+
 class MultiTargetDataset(GraphDataset):
     def __init__(self, instances_fpaths,
                  sols_dir='/home/bruno/sat-gnn/data/interim',
-                 name='Instance + Multiple targets', split='train', return_model=False,
+                 name='Instance + Multiple targets', return_model=False,
                  **kwargs):
-        super().__init__(instances_fpaths, sols_dir, name, split, return_model,
+        super().__init__(instances_fpaths, sols_dir, name, return_model,
                          **kwargs)
 
     def load_target(self, instance_fp, sols_dir):
