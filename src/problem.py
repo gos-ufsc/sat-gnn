@@ -600,7 +600,24 @@ class Instance:
         candidate = dict(zip(vars_names, random_solution))
 
         return candidate
-        
+
+    def get_soc_from_solution(self, X):
+        x = X[self.vars_names.find('x(') >= 0]
+
+        # format candidate solution for each job
+        x = x.reshape((self.jobs, self.T))
+
+        total_power_use = np.array(self.power_use) @ x
+
+        bat = np.array(self.power_resource) - total_power_use
+        i = bat / self.v_bat
+
+        soc = np.zeros(total_power_use.shape)
+        soc[0] = self.initial_soc
+        for t in range(1,self.T):
+            soc[t] = soc[t-1] + (self.ef / self.q) * (i[t] / 60)
+
+        return soc
 
 class PrimalDualIntegralHandler(Eventhdlr):
     def __init__(self, eventtypes=[SCIP_EVENTTYPE.NODESOLVED, SCIP_EVENTTYPE.BESTSOLFOUND],
