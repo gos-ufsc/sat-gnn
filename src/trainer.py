@@ -255,7 +255,7 @@ class Trainer(ABC):
             config=self._wandb_config,
         )
 
-        wandb.watch(self.net)
+        wandb.watch(self.net, log=None)
 
         self._id = wandb.run.id
 
@@ -650,6 +650,70 @@ class GraphTrainer(Trainer):
                 primal_dual_integral = -1
 
         return infeasible, runtime, objective, gap, primal_dual_integral
+
+class FeasibilityClassificationTrainer(GraphTrainer):
+    # def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
+    #              validation_dataset: DGLDataset = None,
+    #              test_dataset: DGLDataset = None, get_best_model=False,
+    #              ef_time_budget=10, epochs=5, lr=0.001, batch_size=2 ** 4,
+    #              optimizer: str = 'Adam', optimizer_params=dict(),
+    #              loss_func: str = 'BCEWithLogitsLoss', loss_func_params=dict(),
+    #              lr_scheduler: str = None, lr_scheduler_params=dict(),
+    #              mixed_precision=True, device=None, wandb_project=None,
+    #              wandb_group=None, logger=None, checkpoint_every=50,
+    #              random_seed=42, max_loss=None) -> None:
+    #     super().__init__(net, training_dataset, validation_dataset,
+    #                      test_dataset, get_best_model, ef_time_budget, epochs,
+    #                      lr, batch_size, optimizer, optimizer_params, loss_func,
+    #                      loss_func_params, lr_scheduler, lr_scheduler_params,
+    #                      mixed_precision, device, wandb_project, wandb_group,
+    #                      logger, checkpoint_every, random_seed, max_loss)
+
+    def data_pass(self, data, train=False):
+        loss = 0
+        size = 0
+        metrics = list()
+
+        forward_time = 0
+        loss_time = 0
+        backward_time = 0
+
+        self.net.train(train)
+        with torch.set_grad_enabled(train):
+            for g, y in data:
+                g = g.to(self.device)
+                y = y.to(self.device)
+
+                with self.autocast_if_mp():
+                    batch_forward_time, output = timeit(self.net)(g)
+                    forward_time += batch_forward_time
+
+                    batch_loss_time, batch_loss, batch_metrics = self.get_loss_and_metrics(output, y, validation=not train)
+                loss_time += batch_loss_time
+
+                metrics.append(batch_metrics)
+
+                if train:
+                    batch_backward_time = self.optim_step(batch_loss)
+                    backward_time += batch_backward_time
+
+                loss += batch_loss.item() * g.batch_size
+                size += g.batch_size
+
+            if self.lr_scheduler is not None:
+                self._scheduler.step()
+
+        if all([b_m is None for b_m in metrics]):
+            metrics = None
+
+        losses = self.aggregate_loss_and_metrics(loss, size, metrics)
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+            'backward': backward_time,
+        }
+
+        return losses, times
 
 class MultiTargetTrainer(GraphTrainer):
     def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
