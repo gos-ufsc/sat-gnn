@@ -38,10 +38,22 @@ if __name__ == '__main__':
     # ds.save_dataset('data/processed/multitarget_125_97_small_all_200.hdf5')
 
     ds = SolutionFeasibilityDataset(
-        [fp for fp in Path('data/raw/').glob('125_*.json') if (int(fp.name.split('_')[1]) < 20)],
+        [fp for fp in Path('data/raw/').glob('125_*.json') if (int(fp.name.split('_')[1]) < 20) and (int(fp.name.split('_')[2].replace('.json', '')) < 200)],
     )
     ds.maybe_initialize()
     ds.save_dataset('data/processed/feasibility_125_train.hdf5')
+
+    ds = SolutionFeasibilityDataset(
+        [fp for fp in Path('data/raw/').glob('125_*.json') if (int(fp.name.split('_')[1]) >= 20) and (int(fp.name.split('_')[2].replace('.json', '')) < 20)],
+    )
+    ds.maybe_initialize()
+    ds.save_dataset('data/processed/feasibility_125_val.hdf5')
+
+    ds = SolutionFeasibilityDataset(
+        [fp for fp in Path('data/raw/').glob('125_*.json') if (int(fp.name.split('_')[1]) >= 20) and (int(fp.name.split('_')[2].replace('.json', '')) < 40) and (int(fp.name.split('_')[2].replace('.json', '')) >= 20)],
+    )
+    ds.maybe_initialize()
+    ds.save_dataset('data/processed/feasibility_125_test.hdf5')
 
     # ds = MultiTargetDataset(
     #     [fp for fp in Path('data/raw/').glob('125_*.json') if int(fp.name.split('_')[1]) >= 20],

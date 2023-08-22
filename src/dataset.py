@@ -3,11 +3,13 @@ from copy import deepcopy
 from pathlib import Path
 import pickle
 from typing import List
+from joblib import Parallel, delayed, cpu_count
 
 import dgl
 import gurobipy
 import numpy as np
 import torch
+from tqdm import tqdm
 from pyscipopt import Model
 from dgl.data import DGLDataset
 
@@ -166,7 +168,7 @@ class GraphDataset(DGLDataset,ABC):
         self = cls(**meta['kwargs'])
 
         for k, v in meta.items():
-            if k is not 'kwargs':
+            if k != 'kwargs':
                 setattr(self, k, v)
 
         return self
@@ -235,10 +237,15 @@ class SolutionFeasibilityDataset(GraphDataset):
         src_model.setObjective(1, "maximize")
         src_model.hideOutput()
 
-        y = list()
-        X = list()
-        for candidate in candidates:
-            model = Model(sourceModel=src_model)
+        model_fpath = 'model.cip'
+        src_model.writeProblem(model_fpath)
+
+        del src_model
+
+        def is_candidate_feasible(candidate):
+            model = Model()
+            model.hideOutput()
+            model.readProblem('model.cip')
 
             for var in model.getVars():
                 try:
@@ -249,7 +256,10 @@ class SolutionFeasibilityDataset(GraphDataset):
 
             model.optimize()
 
-            y.append(int(model.getStatus().lower() == 'optimal'))
+            return int(model.getStatus().lower() == 'optimal')
+
+        y = Parallel(n_jobs=cpu_count()-1)(delayed(is_candidate_feasible)(candidate) for candidate in candidates)
+        y = list(y)
 
         return np.array(y)
 
@@ -258,8 +268,9 @@ class SolutionFeasibilityDataset(GraphDataset):
         models = list()
         self.targets = list()
         self.inputs = list()
+        self.idx_gs = list()
         self.gs = list()
-        for instance_fp in sorted(instances_fpaths):
+        for instance_fp in tqdm(sorted(instances_fpaths)):
             instance = Instance.from_file(instance_fp)
 
             try:
@@ -292,12 +303,13 @@ class SolutionFeasibilityDataset(GraphDataset):
             y = np.hstack([y_sols, y_dirty, y_random])
 
             # multiple references to the same graph
-            g = self.load_graph(instance)
-            for _ in range(X.shape[0]):
-                self.gs.append(g)
+            self.idx_gs += [len(self.gs),] * X.shape[0]
+            # for _ in range(X.shape[0]):
+            #     self.idx_gs.append(len(self.gs))
+            self.gs.append(self.load_graph(instance))
 
-            self.targets += y.tolist()
-            self.inputs += X.tolist()
+            self.targets += list(y)
+            self.inputs += list(X)
 
             if return_model:
                 models.append(instance.to_scip())
@@ -311,7 +323,7 @@ class SolutionFeasibilityDataset(GraphDataset):
         self._lazy = False
 
     def getitem(self, idx):
-        g = self.gs[idx]
+        g = self.gs[self.idx_gs[idx]]
         x = self.inputs[idx]
         y = self.targets[idx]
 
@@ -338,6 +350,7 @@ class SolutionFeasibilityDataset(GraphDataset):
         meta = {
             'targets': self.targets,
             'inputs': self.inputs,
+            'idx_gs': self.idx_gs,
             'kwargs': self._own_kwargs,
         }
 
