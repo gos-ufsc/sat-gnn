@@ -49,7 +49,7 @@ def save_instance(tjn, instance: Instance, target_dir):
 def new_feasible_instance_or_none(t, j, timeout=60):
     instance = Instance.random(t, j)
 
-    model = instance.to_gurobipy(new_inequalities=True, timeout=timeout)
+    model = instance.to_gurobipy(new_inequalities=False, timeout=timeout)
     model.setObjective(1, GRB.MAXIMIZE)  # we just care about feasibility here
     model.update()
     model.optimize()
@@ -123,7 +123,7 @@ if __name__ == '__main__':
     new_instances = dict()
     tjs = list()
     ns = list()
-    for tj in [(t, j) for t in [125,97]
+    for tj in [(t, j) for t in [125]
                       for j in [9,13,18]]:
         n = len(list(target_dir.glob("%d_%d_*.json" % tj)))
 
@@ -155,3 +155,6 @@ if __name__ == '__main__':
 
     for p in ps:
         p.join()
+    
+    log_queue.put(None)
+    listener.join()
