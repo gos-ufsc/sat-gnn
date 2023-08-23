@@ -3,10 +3,10 @@ import pickle
 import numpy as np
 import torch
 import torch.nn
-from src.dataset import MultiTargetDataset, OptimalsDataset, OptimalsWithZetaDataset, VarOptimalityDataset
+from src.dataset import MultiTargetDataset, OptimalsDataset, OptimalsWithZetaDataset, VarOptimalityDataset, SolutionFeasibilityDataset
 
 from src.net import AttentionInstanceGCN, InstanceGCN, VarInstanceGCN
-from src.trainer import MultiTargetTrainer, OptimalsTrainer, PhiMultiTargetTrainer, VarOptimalityTrainer
+from src.trainer import MultiTargetTrainer, OptimalsTrainer, PhiMultiTargetTrainer, VarOptimalityTrainer, FeasibilityClassificationTrainer
 from src.utils import debugger_is_active
 
 
@@ -29,36 +29,36 @@ if __name__ == '__main__':
         wandb_project = 'sat-gnn'
 
     # Early fixing the solution to all jobs, including coupling constraints
-    for _ in range(1):
-        net = InstanceGCN(
-            readout_op=None,
-            # conv1='GraphConv',
-            # conv1_kwargs={'norm': 'both'},
-            # conv2='GraphConv',
-            # conv2_kwargs={'norm': 'both'},
-            # conv1='GATv2Conv',
-            # # conv1_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
-            # conv1_kwargs={'num_heads': 1,},
-            # conv2='GATv2Conv',
-            # # conv2_kwargs={'num_heads': 1, 'allow_zero_in_degree': True,},
-            # conv2_kwargs={'num_heads': 1,},
-        )
-
-        instances_fpaths = list(Path('data/raw/').glob('97_*.json'))
-
-        train_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_97_all.hdf5').get_split('train')
-        val_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_97_all.hdf5').get_split('val')
-        MultiTargetTrainer(
-            net.double(),
-            training_dataset=train_dataset,
-            validation_dataset=val_dataset,
-            epochs=100,
+    for _ in range(3):
+        net = InstanceGCN(readout_op='mean')
+        train_dataset = SolutionFeasibilityDataset.from_file_lazy('data/processed/feasibility_125_train.hdf5')
+        val_dataset = SolutionFeasibilityDataset.from_file_lazy('data/processed/feasibility_125_val.hdf5')
+        FeasibilityClassificationTrainer(
+            net,
+            train_dataset,
+            val_dataset,
+            epochs=5,
             wandb_project=wandb_project,
-            wandb_group='Multi-target + SAGE + PreNorm',
             random_seed=seed,
-            ef_time_budget=10*60,  # visibility window
             device=device,
         ).run()
+        # net = InstanceGCN(
+        #     readout_op=None,
+        # )
+
+        # train_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_125_97_small_all_200.hdf5').get_split('all')
+        # val_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_125_large_all.hdf5').get_split('val')
+        # MultiTargetTrainer(
+        #     net.double(),
+        #     training_dataset=train_dataset,
+        #     validation_dataset=val_dataset,
+        #     epochs=100,
+        #     wandb_project=wandb_project,
+        #     wandb_group='A LOT OF SMALL INSTANCES - Multi-target + SAGE + PreNorm',
+        #     random_seed=seed,
+        #     ef_time_budget=2*60,
+        #     device=device,
+        # ).run()
 
         # # train_dataset = OptimalsDataset(instances_fpaths=instances_fpaths,
         # #                                 sols_dir='/home/bruno/sat-gnn/data/interim',

@@ -714,6 +714,16 @@ class FeasibilityClassificationTrainer(GraphTrainer):
         }
 
         return losses, times
+    
+    def get_loss_and_metrics(self, y_hat, y, validation=False):
+        loss_time, loss =  timeit(self._loss_func)(y_hat.view_as(y), y.to(y_hat))
+
+        metrics = None
+        if validation:
+            # here you can compute performance metrics (populate `metrics`)
+            pass
+
+        return loss_time, loss, metrics
 
 class MultiTargetTrainer(GraphTrainer):
     def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
