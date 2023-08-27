@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from time import time
 from typing import List
+from tqdm import tqdm
 
 import dgl
 import gurobipy
@@ -18,7 +19,8 @@ from torch.utils.data.sampler import SubsetRandomSampler
 from torch.utils.data import DataLoader, Dataset
 from dgl.dataloading import GraphDataLoader
 from dgl.data import DGLDataset
-from src.net import InstanceGCN, VarInstanceGCN
+from dgl.data.utils import Subset
+from src.net import SatGNN, VarInstanceGCN
 
 from src.problem import ModelWithPrimalDualIntegral, get_soc
 from src.dataset import MultiTargetDataset, OptimalsDataset, VarOptimalityDataset
@@ -360,13 +362,11 @@ class Trainer(ABC):
                 f"{epoch_end_time - epoch_start_time:.2f} seconds"
             )
 
-            if self.max_loss is not None:
-                raise NotImplementedError
-                # if val_score > self.max_loss:
-                #     break
+            if self.early_stopping(data_to_log):
+                break
 
             self._e += 1
-        
+
         if self._log_to_wandb:
             self.l.info(f"Saving model")
             self.save_model(name='model_last')
@@ -397,6 +397,14 @@ class Trainer(ABC):
         self.l.info('Training finished!')
 
         return self.net
+    
+    def early_stopping(self, data_to_log):
+        """Return True if the early-stopping criteria is met.
+        """
+        try:
+            return data_to_log['val_loss'] > self.max_loss
+        except:
+            return False
 
     def optim_step(self, loss):
         if self.mixed_precision:
@@ -514,7 +522,7 @@ class Trainer(ABC):
         return fpath
 
 class GraphTrainer(Trainer):
-    def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
+    def __init__(self, net: SatGNN, training_dataset: DGLDataset,
                  validation_dataset: DGLDataset = None,
                  test_dataset: DGLDataset = None, get_best_model=False,
                  ef_time_budget=10, epochs=5, lr=1e-3, batch_size=2 ** 4,
@@ -652,23 +660,6 @@ class GraphTrainer(Trainer):
         return infeasible, runtime, objective, gap, primal_dual_integral
 
 class FeasibilityClassificationTrainer(GraphTrainer):
-    # def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
-    #              validation_dataset: DGLDataset = None,
-    #              test_dataset: DGLDataset = None, get_best_model=False,
-    #              ef_time_budget=10, epochs=5, lr=0.001, batch_size=2 ** 4,
-    #              optimizer: str = 'Adam', optimizer_params=dict(),
-    #              loss_func: str = 'BCEWithLogitsLoss', loss_func_params=dict(),
-    #              lr_scheduler: str = None, lr_scheduler_params=dict(),
-    #              mixed_precision=True, device=None, wandb_project=None,
-    #              wandb_group=None, logger=None, checkpoint_every=50,
-    #              random_seed=42, max_loss=None) -> None:
-    #     super().__init__(net, training_dataset, validation_dataset,
-    #                      test_dataset, get_best_model, ef_time_budget, epochs,
-    #                      lr, batch_size, optimizer, optimizer_params, loss_func,
-    #                      loss_func_params, lr_scheduler, lr_scheduler_params,
-    #                      mixed_precision, device, wandb_project, wandb_group,
-    #                      logger, checkpoint_every, random_seed, max_loss)
-
     def data_pass(self, data, train=False):
         loss = 0
         size = 0
@@ -680,7 +671,7 @@ class FeasibilityClassificationTrainer(GraphTrainer):
 
         self.net.train(train)
         with torch.set_grad_enabled(train):
-            for g, y in data:
+            for g, y in tqdm(data):
                 g = g.to(self.device)
                 y = y.to(self.device)
 
@@ -720,13 +711,68 @@ class FeasibilityClassificationTrainer(GraphTrainer):
 
         metrics = None
         if validation:
-            # here you can compute performance metrics (populate `metrics`)
-            pass
+            pred = torch.sigmoid(y_hat.view_as(y)) > 0.5
+            pred = pred.to(y)
+            hit = pred == y
+
+            metrics = (hit,)
 
         return loss_time, loss, metrics
 
+    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
+        # scale to data size
+        loss = loss / size
+
+        losses = {
+            'all': loss
+            # here you can aggregate metrics computed on the validation set and
+            # track them on wandb
+        }
+
+        if metrics is not None:
+            hits = [m[0] for m in metrics]
+            hits = torch.hstack(hits)
+
+            losses['accuracy'] = hits.sum().item() / size
+
+        return losses
+
+class InstanceFeasibilityClassificationTrainer(FeasibilityClassificationTrainer):
+    def __init__(self, net: SatGNN, dataset: DGLDataset,
+                 test_dataset: DGLDataset = None, get_best_model=False,
+                 ef_time_budget=10, epochs=5, lr=0.001, batch_size=2 ** 7,
+                 optimizer: str = 'Adam', optimizer_params=dict(),
+                 loss_func: str = 'BCEWithLogitsLoss', loss_func_params=dict(),
+                 lr_scheduler: str = None, lr_scheduler_params=dict(),
+                 mixed_precision=True, device=None, wandb_project=None,
+                 wandb_group=None, logger=None, checkpoint_every=50,
+                 random_seed=42, max_loss=None, min_train_loss=1e-2) -> None:
+        super().__init__(net, dataset, None, test_dataset, get_best_model,
+                         ef_time_budget, epochs, lr, batch_size, optimizer,
+                         optimizer_params, loss_func, loss_func_params,
+                         lr_scheduler, lr_scheduler_params, mixed_precision,
+                         device, wandb_project, wandb_group, logger,
+                         checkpoint_every, random_seed, max_loss)
+        self.min_train_loss = min_train_loss
+
+    def prepare_data(self, dataset, validation_dataset=None, test_dataset=None):
+        n = len(dataset)
+        all_idx = np.arange(n)
+
+        training_idx = np.random.choice(all_idx, int(0.8*n), replace=False)
+        training_dataset = Subset(dataset, training_idx)
+
+        validation_idx = [i for i in all_idx if i not in training_idx]
+        validation_dataset = Subset(dataset, validation_idx)
+
+        return super().prepare_data(training_dataset, validation_dataset,
+                                    test_dataset)
+
+    def early_stopping(self, data_to_log):
+        return data_to_log['train_loss'] < self.min_train_loss
+
 class MultiTargetTrainer(GraphTrainer):
-    def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
+    def __init__(self, net: SatGNN, training_dataset: DGLDataset,
                  validation_dataset: DGLDataset = None,
                  test_dataset: DGLDataset = None, get_best_model=False,
                  ef_time_budget=10, epochs=5, lr=0.001,
@@ -845,7 +891,7 @@ class PhiMultiTargetTrainer(MultiTargetTrainer):
         return loss_time, loss, metrics
 
 class OptimalsTrainer(GraphTrainer):
-    def __init__(self, net: InstanceGCN, training_dataset: DGLDataset,
+    def __init__(self, net: SatGNN, training_dataset: DGLDataset,
                  validation_dataset: DGLDataset = None,
                  test_dataset: DGLDataset = None, get_best_model=False,
                  ef_time_budget=10, epochs=5, lr=0.001, batch_size=2 ** 2,
