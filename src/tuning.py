@@ -4,7 +4,7 @@ from typing import List
 from optuna.trial import Trial
 import torch
 
-from src.net import InstanceGCN
+from src.net import SatGNN
 from src.trainer import EarlyFixingTrainer
 
 
@@ -63,7 +63,7 @@ def get_objective(instances_fpaths: List[Path], opts, wandb_project=None,
         n_passes = trial.suggest_int('n_passes', 1, 2)
 
         try:
-            net = InstanceGCN(
+            net = SatGNN(
                 2,
                 n_h_feats=n_h_feats,
                 single_conv_for_both_passes=single_conv_for_both_passes,

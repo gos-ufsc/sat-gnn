@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from src.dataset import MultiTargetDataset
-from src.net import InstanceGCN
+from src.net import SatGNN
 from src.utils import load_from_wandb
 
 
@@ -86,7 +86,7 @@ if __name__ == '__main__':
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
     instances_fpaths = list(instances_dir.glob('97_9_*.json'))
 
-    net = InstanceGCN(1, readout_op=None)
+    net = SatGNN(1, readout_op=None)
     net = load_from_wandb(net, wandb_run_id, 'sat-gnn', 'model_last')
     net.eval()
 

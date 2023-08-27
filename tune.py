@@ -8,7 +8,7 @@ import torch.nn
 
 from optuna.trial import Trial
 
-from src.net import InstanceGCN
+from src.net import SatGNN
 from src.trainer import EarlyFixingTrainer
 from src.tuning import get_objective
 from src.utils import debugger_is_active

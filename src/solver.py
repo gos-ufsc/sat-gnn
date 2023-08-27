@@ -5,7 +5,7 @@ import torch
 
 import wandb
 from pyscipopt import quicksum
-from src.net import InstanceGCN
+from src.net import SatGNN
 from src.problem import Instance, ModelWithPrimalDualIntegral
 
 
@@ -62,7 +62,7 @@ class LearningBasedSolver(ABC,SCIPSolver):
 
         self.n = n
 
-        self.net = InstanceGCN(readout_op=None)  # TODO: initialize net following run's config
+        self.net = SatGNN(readout_op=None)  # TODO: initialize net following run's config
 
         net_run = wandb.init(project='sat-gnn', id=net_wandb_id)
         net_config = net_run.config
