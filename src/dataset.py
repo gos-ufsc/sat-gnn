@@ -200,6 +200,9 @@ class SolutionFeasibilityDataset(GraphDataset):
         self.noise_size = noise_size
         self.skip_feasibility_check = skip_feasibility_check
 
+    def len(self):
+        return len(self.idx_gs)
+
     def load_target(self, instance_fp, sols_dir):
         sol_fp = sols_dir/instance_fp.name.replace('.json', '_sols.npz')
 
@@ -221,12 +224,13 @@ class SolutionFeasibilityDataset(GraphDataset):
 
         X = np.where(noise, 1 - X, X)  # dirty X
 
-        candidates = list()
-        for x in X:
+        def get_candidate_from_x(x, instance):
             candidate = dict(
                 zip(instance.vars_names[instance.vars_names.find('x(') >= 0], x)
             )
-            candidates.append(instance.add_phi_to_candidate(candidate))
+            return instance.add_phi_to_candidate(candidate)
+        candidates = Parallel(n_jobs=cpu_count()-1)(delayed(get_candidate_from_x)(x, instance) for x in X)
+        candidates = list(candidates)
 
         return candidates
 
@@ -286,18 +290,24 @@ class SolutionFeasibilityDataset(GraphDataset):
             )
             X_dirty = np.stack([np.array([candidate[v] for v in instance.vars_names])
                                 for candidate in dirty_candidates])
-            y_dirty = self._check_feasibility_get_y(
-                dirty_candidates,
-                instance,
-            )
+            if self.skip_feasibility_check:
+                y_dirty = np.zeros(X_dirty.shape[0])
+            else:
+                y_dirty = self._check_feasibility_get_y(
+                    dirty_candidates,
+                    instance,
+                )
 
             X_random = np.random.choice([0,1], (self.n_random, X_sols.shape[1]))
             random_candidates = [dict(zip(instance.vars_names, x))
                                  for x in X_random]
-            y_random = self._check_feasibility_get_y(
-                random_candidates,
-                instance,
-            )
+            if self.skip_feasibility_check:
+                y_random = np.zeros(X_random.shape[0])
+            else:
+                y_random = self._check_feasibility_get_y(
+                    random_candidates,
+                    instance,
+                )
 
             X = np.vstack([X_sols, X_dirty, X_random])
             y = np.hstack([y_sols, y_dirty, y_random])
@@ -339,7 +349,7 @@ class SolutionFeasibilityDataset(GraphDataset):
         if not self._lazy:
             g = deepcopy(g)
 
-        g.ndata['x']['var'] = torch.hstack([
+        g.nodes['var'].data['x'] = torch.hstack([
             g.ndata['x']['var'],
             torch.from_numpy(x).to(g.ndata['x']['var']).unsqueeze(1)
         ])
