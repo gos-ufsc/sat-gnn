@@ -5,40 +5,62 @@ import pickle
 import numpy as np
 import torch
 import torch.nn
+from tqdm import tqdm
 
-from optuna.trial import Trial
+from itertools import product
+from random import shuffle
 
-from src.net import SatGNN
-from src.trainer import EarlyFixingTrainer
-from src.tuning import get_objective
-from src.utils import debugger_is_active
+from src.net import OptSatGNN
+from src.trainer import MultiTargetTrainer
+# from src.tuning import get_objective
+from src.dataset import MultiTargetDataset
 
+
+def product_dict(**kwargs):
+    """From https://stackoverflow.com/a/5228294/7964333."""
+    keys = kwargs.keys()
+    for instance in product(*kwargs.values()):
+        yield dict(zip(keys, instance))
 
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    if debugger_is_active():
-        wandb_project = None
-    else:
-        wandb_project = 'sat-gnn'
-    wandb_group = 'EarlyFixingInstance-validation'
+    wandb_project = 'sat-gnn'
+    wandb_group = 'GridSearch-MultiTarget'
 
-    # instances_fpaths = list(Path('data/raw/').glob('97_9*.jl'))
-    instances_fpaths = [fp for fp in Path('data/raw/').glob('97_9*.jl') if fp.name not in ['97_9_9.jl', '97_9_6.jl']]
-    print(instances_fpaths)
-    with open('97_9_opts.pkl', 'rb') as f:
-        opts = pickle.load(f)
+    train_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_125_small_train.hdf5')
+    val_dataset = MultiTargetDataset.from_file_lazy('data/processed/multitarget_125_small_val.hdf5')
 
-    study_fpath = Path('study_val.pkl')
+    hp_ranges = {
+        'lr': [1e-2, 1e-3, 1e-4],
+        'n_h_feats': [2**5, 2**6, 2**7, 2**8],
+        'single_conv_for_both_passes': [True, False],
+        'n_passes': [1, 2, 3],
+        'conv1': ['GraphConv', 'SAGEConv'],
+        # 'conv2': ['GraphConv', 'SAGEConv'],
+        # 'conv3': ['GraphConv', 'SAGEConv'],
+    }
 
-    if study_fpath.exists():
-        with open(study_fpath, 'rb') as f:
-            study = pickle.load(f)
-    else:
-        study = optuna.create_study(study_name='early fixing')
+    candidate_hps = product_dict(**hp_ranges)
+    candidate_hps = list(candidate_hps)
+    shuffle(candidate_hps)
 
-    for _ in range(100):
-        study.optimize(get_objective(instances_fpaths, opts, wandb_project=wandb_project, wandb_group=wandb_group), n_trials=1)
+    for hps in tqdm(candidate_hps):
+        lr = hps.pop('lr')
 
-        with open(study_fpath, 'wb') as f:
-            pickle.dump(study, f)
+        for c in ['conv1', 'conv2', 'conv3']:
+            if hps[c] == 'SAGEConv':
+                hps[c+'_kwargs'] = {'aggregator_type': 'pool'}
+
+        net = OptSatGNN(**hps)
+        trainer = MultiTargetTrainer(
+            net,
+            train_dataset,
+            val_dataset,
+            lr=lr,
+            epochs=10,
+            get_best_model=True,
+        )
+        trainer.run()
+
+        trainer.best_val
