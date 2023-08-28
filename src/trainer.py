@@ -525,7 +525,7 @@ class GraphTrainer(Trainer):
     def __init__(self, net: SatGNN, training_dataset: DGLDataset,
                  validation_dataset: DGLDataset = None,
                  test_dataset: DGLDataset = None, get_best_model=False,
-                 ef_time_budget=10, epochs=5, lr=1e-3, batch_size=2 ** 4,
+                 epochs=5, lr=1e-3, batch_size=2 ** 4,
                  optimizer: str = 'Adam', optimizer_params=dict(),
                  loss_func: str = 'BCEWithLogitsLoss', loss_func_params=dict(),
                  lr_scheduler: str = None, lr_scheduler_params=dict(),
@@ -539,7 +539,6 @@ class GraphTrainer(Trainer):
                          device, wandb_project, wandb_group, logger,
                          checkpoint_every, random_seed, max_loss)
 
-        self.ef_time_budget = ef_time_budget
 
         self._add_to_wandb_config({
             "n_passes": self.net.n_passes,
@@ -549,7 +548,6 @@ class GraphTrainer(Trainer):
             "train_dataset": training_dataset.name,
             "val_dataset": validation_dataset.name if validation_dataset is not None else None,
             "test_dataset": test_dataset.name if test_dataset is not None else None,
-            "ef_time_budget": self.ef_time_budget,
         })
 
     def prepare_data(self, training_dataset, validation_dataset=None,
@@ -740,7 +738,7 @@ class FeasibilityClassificationTrainer(GraphTrainer):
 class InstanceFeasibilityClassificationTrainer(FeasibilityClassificationTrainer):
     def __init__(self, net: SatGNN, dataset: DGLDataset,
                  test_dataset: DGLDataset = None, get_best_model=False,
-                 ef_time_budget=10, epochs=5, lr=0.001, batch_size=2 ** 7,
+                 epochs=5, lr=0.001, batch_size=2 ** 7,
                  optimizer: str = 'Adam', optimizer_params=dict(),
                  loss_func: str = 'BCEWithLogitsLoss', loss_func_params=dict(),
                  lr_scheduler: str = None, lr_scheduler_params=dict(),
@@ -748,7 +746,7 @@ class InstanceFeasibilityClassificationTrainer(FeasibilityClassificationTrainer)
                  wandb_group=None, logger=None, checkpoint_every=50,
                  random_seed=42, max_loss=None, min_train_loss=1e-2) -> None:
         super().__init__(net, dataset, None, test_dataset, get_best_model,
-                         ef_time_budget, epochs, lr, batch_size, optimizer,
+                         epochs, lr, batch_size, optimizer,
                          optimizer_params, loss_func, loss_func_params,
                          lr_scheduler, lr_scheduler_params, mixed_precision,
                          device, wandb_project, wandb_group, logger,
@@ -775,7 +773,7 @@ class MultiTargetTrainer(GraphTrainer):
     def __init__(self, net: SatGNN, training_dataset: DGLDataset,
                  validation_dataset: DGLDataset = None,
                  test_dataset: DGLDataset = None, get_best_model=False,
-                 ef_time_budget=10, epochs=5, lr=0.001,
+                 epochs=5, lr=0.001,
                  optimizer: str = 'Adam', optimizer_params=dict(),
                  loss_func: str = 'BCEWithLogitsLoss',
                  loss_func_params={'reduction': 'none'},
@@ -785,7 +783,7 @@ class MultiTargetTrainer(GraphTrainer):
                  random_seed=42, max_loss=None) -> None:
         batch_size = 1
         super().__init__(net, training_dataset, validation_dataset,
-                         test_dataset, get_best_model, ef_time_budget, epochs,
+                         test_dataset, get_best_model, epochs,
                          lr, batch_size, optimizer, optimizer_params,
                          loss_func, loss_func_params, lr_scheduler,
                          lr_scheduler_params, mixed_precision, device,
@@ -894,7 +892,7 @@ class OptimalsTrainer(GraphTrainer):
     def __init__(self, net: SatGNN, training_dataset: DGLDataset,
                  validation_dataset: DGLDataset = None,
                  test_dataset: DGLDataset = None, get_best_model=False,
-                 ef_time_budget=10, epochs=5, lr=0.001, batch_size=2 ** 2,
+                 epochs=5, lr=0.001, batch_size=2 ** 2,
                  optimizer: str = 'Adam', optimizer_params=dict(),
                  loss_func: str = 'BCEWithLogitsLoss', loss_func_params=dict(),
                  lr_scheduler: str = None, lr_scheduler_params=dict(),
@@ -902,7 +900,7 @@ class OptimalsTrainer(GraphTrainer):
                  wandb_group=None, logger=None, checkpoint_every=50,
                  random_seed=42, max_loss=None) -> None:
         super().__init__(net, training_dataset, validation_dataset,
-                         test_dataset, get_best_model, ef_time_budget, epochs,
+                         test_dataset, get_best_model, epochs,
                          lr, batch_size, optimizer, optimizer_params,
                          loss_func, loss_func_params, lr_scheduler,
                          lr_scheduler_params, mixed_precision, device,
@@ -969,7 +967,7 @@ class VarOptimalityTrainer(OptimalsTrainer):
                  training_dataset: VarOptimalityDataset,
                  validation_dataset: VarOptimalityDataset = None,
                  test_dataset: VarOptimalityDataset = None,
-                 get_best_model=False, ef_time_budget=10, epochs=5, lr=0.001,
+                 get_best_model=False, epochs=5, lr=0.001,
                  batch_size=2 ** 4, optimizer: str = 'Adam',
                  optimizer_params=dict(), loss_func: str = 'BCEWithLogitsLoss',
                  loss_func_params=dict(), lr_scheduler: str = None,
@@ -977,7 +975,7 @@ class VarOptimalityTrainer(OptimalsTrainer):
                  wandb_project=None, wandb_group=None, logger=None,
                  checkpoint_every=50, random_seed=42, max_loss=None) -> None:
         super().__init__(net, training_dataset, validation_dataset,
-                         test_dataset, get_best_model, ef_time_budget, epochs,
+                         test_dataset, get_best_model, epochs,
                          lr, batch_size, optimizer, optimizer_params,
                          loss_func, loss_func_params, lr_scheduler,
                          lr_scheduler_params, mixed_precision, device,
