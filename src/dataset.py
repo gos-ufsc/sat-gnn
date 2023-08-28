@@ -80,7 +80,7 @@ class GraphDataset(DGLDataset,ABC):
         models = list()
         self.targets = list()
         self.gs = list()
-        for instance_fp in sorted(instances_fpaths):
+        for instance_fp in tqdm(sorted(instances_fpaths)):
             try:
                 target = self.load_target(instance_fp, sols_dir)
             except AssertionError:
