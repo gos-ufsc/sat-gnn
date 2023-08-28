@@ -13,51 +13,51 @@ if __name__ == '__main__':
 
     wandb_project = 'sat-gnn'
 
-    # ##### Experiment 1
+    ##### Experiment 1
 
-    # wandb_group = 'FeasClass-SingleInstance'
-    # for size in [9, 13, 18, 20, 22, 24]:
-    #     instances_fpaths = list(Path('data/raw/').glob(f'125_{size}_*.json'))
+    wandb_group = 'FeasClass-SingleInstance'
+    for size in [9, 13, 18, 20, 22, 24]:
+        instances_fpaths = list(Path('data/raw/').glob(f'125_{size}_*.json'))
 
-    #     # randomly pick 5 instances from each size
-    #     instances_fpaths = np.random.choice(instances_fpaths, 5, replace=False)
+        # randomly pick 5 instances from each size
+        instances_fpaths = np.random.choice(instances_fpaths, 5, replace=False)
 
-    #     for instance_fpath in instances_fpaths:
-    #         dataset = SolutionFeasibilityDataset([instance_fpath,])
+        for instance_fpath in instances_fpaths:
+            dataset = SolutionFeasibilityDataset([instance_fpath,])
 
-    #         InstanceFeasibilityClassificationTrainer(
-    #             FeasSatGNN(),
-    #             dataset,
-    #             epochs=200,
-    #             min_train_loss=1e-2,
-    #             wandb_project=wandb_project,
-    #             wandb_group=wandb_group+f'-{size}',
-    #             device=device,
-    #         ).run()
+            InstanceFeasibilityClassificationTrainer(
+                FeasSatGNN(),
+                dataset,
+                epochs=200,
+                min_train_loss=1e-2,
+                wandb_project=wandb_project,
+                wandb_group=wandb_group+f'-{size}',
+                device=device,
+            ).run()
 
-    # ##### Experiment 2
+    ##### Experiment 2
 
-    # wandb_group = 'FeasClass-AcrossInstances'
-    # for size in [9, 13, 18, 20, 22, 24]:
-    #     train_dataset = SolutionFeasibilityDataset(
-    #         [fp for fp in Path('data/raw/').glob(f'125_{size}_*.json')
-    #          if int(fp.name.split('_')[2].replace('.json', '')) in np.arange(0,20)],
-    #     )
-    #     val_dataset = SolutionFeasibilityDataset(
-    #         [fp for fp in Path('data/raw/').glob(f'125_{size}_*.json')
-    #          if int(fp.name.split('_')[2].replace('.json', '')) in np.arange(20,30)],
-    #     )
+    wandb_group = 'FeasClass-AcrossInstances'
+    for size in [9, 13, 18, 20, 22, 24]:
+        train_dataset = SolutionFeasibilityDataset(
+            [fp for fp in Path('data/raw/').glob(f'125_{size}_*.json')
+             if int(fp.name.split('_')[2].replace('.json', '')) in np.arange(0,20)],
+        )
+        val_dataset = SolutionFeasibilityDataset(
+            [fp for fp in Path('data/raw/').glob(f'125_{size}_*.json')
+             if int(fp.name.split('_')[2].replace('.json', '')) in np.arange(20,30)],
+        )
 
-    #     FeasibilityClassificationTrainer(
-    #         FeasSatGNN(),
-    #         train_dataset,
-    #         val_dataset,
-    #         epochs=25,
-    #         batch_size=2**6,
-    #         wandb_project=wandb_project,
-    #         wandb_group=wandb_group+f'-{size}',
-    #         device=device,
-    #     ).run()
+        FeasibilityClassificationTrainer(
+            FeasSatGNN(),
+            train_dataset,
+            val_dataset,
+            epochs=25,
+            batch_size=2**6,
+            wandb_project=wandb_project,
+            wandb_group=wandb_group+f'-{size}',
+            device=device,
+        ).run()
 
     ##### Experiment 3
 
