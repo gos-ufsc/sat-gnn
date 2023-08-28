@@ -319,23 +319,24 @@ class Trainer(ABC):
 
             val_score = val_losses['all']  # defines best model
 
-            if self.get_best_model and (val_score < self.best_val):
-                if self._log_to_wandb:
-                    self.l.info(f"Saving best model")
-                    self.save_model(name='model_best')
-
-                if self.test_data is not None:
-                    # test
-                    test_losses, test_times = self.test_pass()
-
-                    self.l.info(f"Test loss = {test_losses['all']}")
-
-                    data_to_log["test_loss"] = test_losses['all']
-
-                    self._add_data_to_log(test_losses, 'test_loss_', data_to_log)
-                    self._add_data_to_log(test_times, 'test_time_', data_to_log)
-
+            if val_score < self.best_val:
                 self.best_val = val_score
+
+                if self.get_best_model:
+                    if self._log_to_wandb:
+                        self.l.info(f"Saving best model")
+                        self.save_model(name='model_best')
+
+                    if self.test_data is not None:
+                        # test
+                        test_losses, test_times = self.test_pass()
+
+                        self.l.info(f"Test loss = {test_losses['all']}")
+
+                        data_to_log["test_loss"] = test_losses['all']
+
+                        self._add_data_to_log(test_losses, 'test_loss_', data_to_log)
+                        self._add_data_to_log(test_times, 'test_time_', data_to_log)
 
         return data_to_log
 
@@ -392,6 +393,8 @@ class Trainer(ABC):
                         wandb.run.summary['last_test_'+k] = v
 
         if self._log_to_wandb:
+            wandb.run.summary['best_val'] = self.best_val
+
             wandb.finish()
 
         self.l.info('Training finished!')
