@@ -801,7 +801,7 @@ class MultiTargetTrainer(GraphTrainer):
             y_hat.repeat(*(np.array(y.shape) // np.array(y_hat.shape))),
             y.to(y_hat),
         )
-        loss = (weight * loss).sum()
+        loss = (weight * loss).mean()
 
         metrics = None
         if validation:
