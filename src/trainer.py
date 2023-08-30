@@ -775,7 +775,7 @@ class InstanceFeasibilityClassificationTrainer(FeasibilityClassificationTrainer)
 class MultiTargetTrainer(GraphTrainer):
     def __init__(self, net: SatGNN, training_dataset: DGLDataset,
                  validation_dataset: DGLDataset = None,
-                 test_dataset: DGLDataset = None, get_best_model=False,
+                 test_dataset: DGLDataset = None, get_best_model=True,
                  epochs=5, lr=0.001,
                  optimizer: str = 'Adam', optimizer_params=dict(),
                  loss_func: str = 'BCEWithLogitsLoss',
