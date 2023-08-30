@@ -5,6 +5,7 @@ import pickle
 import numpy as np
 import torch
 import torch.nn
+from torch.cuda import OutOfMemoryError
 from tqdm import tqdm
 
 from itertools import product
@@ -49,10 +50,11 @@ if __name__ == '__main__':
     hp_ranges = {
         'lr': [1e-2, 1e-3, 1e-4],
         'n_h_feats': [2**5, 2**6, 2**7, 2**8],
+        'batch_size': [2**2, 2**3, 2**4, 2**5],
         'single_conv_for_both_passes': [True, False],
         'n_passes': [1, 2, 3],
         'conv1': ['GraphConv', 'SAGEConv'],
-        'conv2': ['GraphConv', 'SAGEConv', None],
+        'conv2': [None],
         # 'conv3': ['GraphConv', 'SAGEConv'],
     }
 
@@ -62,24 +64,26 @@ if __name__ == '__main__':
 
     for hps in tqdm(candidate_hps):
         lr = hps.pop('lr')
+        batch_size = hps.pop('batch_size')
 
         for c in ['conv1', 'conv2']:
-            # try:
             if hps[c] == 'SAGEConv':
                 hps[c+'_kwargs'] = {'aggregator_type': 'pool'}
             else:
                 hps[c+'_kwargs'] = dict()
-            # except:
-            #     pass
 
         for _ in range(1):  # number of runs
-            OptimalsTrainer(
-                OptSatGNN(**hps),
-                train_dataset,
-                val_dataset,
-                lr=lr,
-                epochs=10,
-                get_best_model=True,
-                wandb_project=wandb_project,
-                wandb_group=wandb_group,
-            ).run()
+            try:
+                OptimalsTrainer(
+                    OptSatGNN(**hps),
+                    train_dataset,
+                    val_dataset,
+                    lr=lr,
+                    batch_size=batch_size,
+                    epochs=10,
+                    get_best_model=True,
+                    wandb_project=wandb_project,
+                    wandb_group=wandb_group,
+                ).run()
+            except OutOfMemoryError:
+                pass
