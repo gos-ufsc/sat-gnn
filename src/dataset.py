@@ -404,9 +404,9 @@ class MultiTargetDataset(GraphDataset):
 class OptimalsDataset(GraphDataset):
     def __init__(self, instances_fpaths,
                  sols_dir='/home/bruno/sat-gnn/data/interim',
-                 name='Instance + (quasi-)Optimal', split='train',
-                 return_model=False, **kwargs):
-        super().__init__(instances_fpaths, sols_dir, name, split, return_model, **kwargs)
+                 name='Instance + (quasi-)Optimal', return_model=False,
+                 **kwargs):
+        super().__init__(instances_fpaths, sols_dir, name, return_model, **kwargs)
 
     def load_target(self, instance_fp, sols_dir):
         sol_fp = sols_dir/instance_fp.name.replace('.json', '_opt.npz')
