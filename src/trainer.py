@@ -168,6 +168,7 @@ class Trainer(ABC):
             epochs=wandb.config['epochs'],
             net=net,
             lr=wandb.config['learning_rate'],
+            batch_size=wandb.config['batch_size'],
             optimizer=wandb.config['optimizer'],
             loss_func=wandb.config['loss_func'],
             lr_scheduler=wandb.config['lr_scheduler'],
@@ -217,6 +218,7 @@ class Trainer(ABC):
         if self._log_to_wandb:
             self._add_to_wandb_config({
                 "learning_rate": self.lr,
+                "batch_size": self.batch_size,
                 "epochs": self.epochs,
                 "model": type(self.net).__name__,
                 "optimizer": self.optimizer,
