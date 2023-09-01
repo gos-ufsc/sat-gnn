@@ -473,7 +473,7 @@ class OptSatGNN(SatGNN):
     def __init__(self, n_var_feats=7, n_con_feats=4, n_soc_feats=6,
                  n_h_feats=64, single_conv_for_both_passes=False, n_passes=1,
                  conv1='SAGEConv', conv1_kwargs={ 'aggregator_type': 'pool' },
-                 conv2='SAGEConv', conv2_kwargs={ 'aggregator_type': 'pool' },
+                 conv2=None, conv2_kwargs=dict(),
                  conv3=None, conv3_kwargs=dict()):
         super().__init__(n_var_feats, n_con_feats, n_soc_feats, n_h_feats,
                          single_conv_for_both_passes, n_passes, conv1,
