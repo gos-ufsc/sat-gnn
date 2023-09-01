@@ -5,7 +5,7 @@ import torch
 
 import wandb
 from pyscipopt import quicksum
-from src.net import SatGNN
+from src.net import OptSatGNN
 from src.problem import Instance, ModelWithPrimalDualIntegral
 
 
@@ -53,6 +53,7 @@ class SCIPSolver(ONTSSolver):
     def load_model(self, instance):
         model = instance.to_scip(enable_primal_dual_integral=True,
                                  timeout=self.timeout)
+        model.hideOutput()
 
         return model
 
@@ -62,15 +63,27 @@ class LearningBasedSolver(ABC,SCIPSolver):
 
         self.n = n
 
-        self.net = SatGNN(readout_op=None)  # TODO: initialize net following run's config
-
-        net_run = wandb.init(project='sat-gnn', id=net_wandb_id)
+        net_run = wandb.Api().run('brunompac/sat-gnn/'+net_wandb_id)
         net_config = net_run.config
         net_group = net_run.group
-        net_file = net_run.restore('model_last.pth', replace=True)
-        net_run.finish()
+        net_file = wandb.restore('model_best.pth', run_path='/'.join(net_run.path),
+                                 replace=True)
 
-        self.net.load_state_dict(torch.load(net_file.name))
+        try:
+            self.net = OptSatGNN(
+                n_h_feats=net_config['n_h_feats'],
+                single_conv_for_both_passes=net_config['single_conv'],
+                n_passes=net_config['n_passes'],
+            )
+            self.net.load_state_dict(torch.load(net_file.name))
+        except RuntimeError:
+            self.net = OptSatGNN(
+                conv1='GraphConv', conv1_kwargs=dict(),
+                n_h_feats=net_config['n_h_feats'],
+                single_conv_for_both_passes=net_config['single_conv'],
+                n_passes=net_config['n_passes'],
+            )
+            self.net.load_state_dict(torch.load(net_file.name))
         self.net.eval()
 
         self._net_config = net_config
