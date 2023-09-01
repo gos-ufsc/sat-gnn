@@ -15,7 +15,13 @@ TIME_BUDGET = 2 * 60  # 2 minutes
 
 if __name__ == '__main__':
     evaluation = sys.argv[1]
-    net_run_id = sys.argv[2]
+
+    try:
+        net_run_id = sys.argv[2]
+    except IndexError:
+        assert evaluation == 'bs'
+        net_run_id = 'baseline'
+
     try:
         n = int(sys.argv[3])
     except IndexError:
@@ -42,10 +48,10 @@ if __name__ == '__main__':
     results_dir = Path('/home/bruno/sat-gnn/data/results')
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
     instances_fpaths = list()
-    for i in range(60, 80):  # VALIDATION
+    for i in range(20):  # VALIDATION
         instances_fpaths += sorted(list(instances_dir.glob('125_2*_'+str(i)+'.json')))
 
-    instances_fpaths = [fp for fp in instances_fpaths if not (results_dir/(f"{net_run_id}_{evaluation}_{n}_{net_run_id}_"+fp.name)).exists()]
+    instances_fpaths = [fp for fp in instances_fpaths if not (results_dir/(f"{net_run_id}_{evaluation}_{n}_"+fp.name)).exists()]
 
     run = wandb.init(project='sat-gnn', job_type=evaluation_name+'-eval')
     run.config['model_run_id'] = net_run_id
@@ -66,7 +72,7 @@ if __name__ == '__main__':
 
         result = solver.solve(instance)
 
-        result_fpath = results_dir/(f"{net_run_id}_{evaluation}_{n}_20s_"+instance_fpath.name)
+        result_fpath = results_dir/(f"{net_run_id}_{evaluation}_{n}_"+instance_fpath.name)
         with open(result_fpath, 'w') as f:
             json.dump(asdict(result), f)
 
