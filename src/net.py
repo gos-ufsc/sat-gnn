@@ -456,7 +456,7 @@ class SatGNN(nn.Module):
         self._pretrain = value
 
     def get_candidate(self, g):
-        return self(g)
+        return torch.sigmoid(self(g))
 
 class FeasSatGNN(SatGNN):
     def __init__(self, n_var_feats=8, n_con_feats=4, n_soc_feats=6,
