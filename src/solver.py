@@ -93,17 +93,35 @@ class LearningBasedSolver(ABC,SCIPSolver):
         model = instance.to_gurobipy()
         graph = instance.to_graph(model=model)
 
-        vars_names = np.core.defchararray.array([v.VarName for v in model.getVars()])
-        vars_names = vars_names[(vars_names.find('x(') >= 0) | (vars_names.find('phi(') >= 0)]
-
         with torch.set_grad_enabled(False):
             x_hat = self.net.get_candidate(graph).flatten().cpu()
-            x_hat = x_hat[:len(vars_names)]  # drop zetas
+            x_hat = x_hat[:len(instance.vars_names)]  # drop zetas
 
         most_certain_idx  = (x_hat - 0.5).abs().sort(descending=True).indices
 
         candidate_x_hat = (x_hat[most_certain_idx[:self.n]] > .5).to(x_hat)
-        candidate_vars_names = vars_names[most_certain_idx[:self.n]]
+        candidate_vars_names = instance.vars_names[most_certain_idx[:self.n]]
+        candidate = dict(zip(candidate_vars_names, candidate_x_hat))
+
+        return candidate
+
+class ConfLearningBasedSolver(LearningBasedSolver):
+    def __init__(self, net_wandb_id: str, confidence_threshold: float, timeout=60) -> None:
+        self.confidence_threshold = confidence_threshold
+        super().__init__(net_wandb_id, None, timeout)
+
+    def get_candidate_solution(self, instance: Instance):
+        model = instance.to_gurobipy()
+        graph = instance.to_graph(model=model)
+
+        with torch.set_grad_enabled(False):
+            x_hat = self.net.get_candidate(graph).flatten().cpu()
+            x_hat = x_hat[:len(instance.vars_names)]  # drop zetas
+
+        confidence = (x_hat - 0.5).abs() + 0.5
+
+        candidate_x_hat = (x_hat[confidence > self.confidence_threshold] > .5).to(x_hat)
+        candidate_vars_names = instance.vars_names[confidence > self.confidence_threshold]
         candidate = dict(zip(candidate_vars_names, candidate_x_hat))
 
         return candidate
@@ -128,6 +146,23 @@ class WarmStartingSolver(LearningBasedSolver):
         return model
 
 class EarlyFixingSolver(LearningBasedSolver):
+    def load_model(self, instance):
+        model = super().load_model(instance)
+
+        candidate = self.get_candidate_solution(instance)
+
+        if candidate is not None:
+            for var in model.getVars():
+                try:
+                    fixed_var_X = candidate[var.name]
+                    # model_.fixVar(var, fixed_var_X)
+                    model.fixVar(var, fixed_var_X)
+                except KeyError:
+                    pass
+
+        return model
+
+class ConfEarlyFixingSolver(ConfLearningBasedSolver):
     def load_model(self, instance):
         model = super().load_model(instance)
 

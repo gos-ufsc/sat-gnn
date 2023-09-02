@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 import wandb
 from src.problem import Instance
-from src.solver import (EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
+from src.solver import (ConfEarlyFixingSolver, EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
                         WarmStartingSolver)
 
 TIME_BUDGET = 2 * 60  # 2 minutes
@@ -24,6 +24,9 @@ if __name__ == '__main__':
 
     try:
         n = int(sys.argv[3])
+    except ValueError:
+        n = float(sys.argv[3])
+        assert n < 1.0
     except IndexError:
         n = 0
 
@@ -31,7 +34,10 @@ if __name__ == '__main__':
 
     if evaluation == 'ef':
         evaluation_name = 'early-fixing'
-        solver = EarlyFixingSolver(net_run_id, n, timeout=TIME_BUDGET)
+        if n < 1 and n > 0:
+            solver = ConfEarlyFixingSolver(net_run_id, n, timeout=TIME_BUDGET)
+        else:
+            solver = EarlyFixingSolver(net_run_id, n, timeout=TIME_BUDGET)
     elif evaluation == 'ws':
         evaluation_name = 'warms-starting'
         solver = WarmStartingSolver(net_run_id, n, timeout=TIME_BUDGET)
@@ -53,11 +59,12 @@ if __name__ == '__main__':
 
     instances_fpaths = [fp for fp in instances_fpaths if not (results_dir/(f"{net_run_id}_{evaluation}_{n}_"+fp.name)).exists()]
 
-    run = wandb.init(project='sat-gnn', job_type=evaluation_name+'-eval')
-    run.config['model_run_id'] = net_run_id
-    run.config['test_instances'] = [fp.name for fp in instances_fpaths]
-    run.config['n'] = n if evaluation != 'bs' else 0
-    run.config['time_budget'] = TIME_BUDGET
+    if len(instances_fpaths) > 0:
+        run = wandb.init(project='sat-gnn', job_type=evaluation_name+'-eval')
+        run.config['model_run_id'] = net_run_id
+        run.config['test_instances'] = [fp.name for fp in instances_fpaths]
+        run.config['n'] = n if evaluation != 'bs' else 0
+        run.config['time_budget'] = TIME_BUDGET
 
     for instance_fpath in tqdm(instances_fpaths):
         # load (quasi-)optimal objective
