@@ -11,7 +11,7 @@ from src.problem import Instance
 from src.solver import (ConfEarlyFixingSolver, EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
                         WarmStartingSolver)
 
-TIME_BUDGET = 2 * 60  # 2 minutes
+TIME_BUDGET = 5 * 60  # 2 minutes
 
 if __name__ == '__main__':
     evaluation = sys.argv[1]
