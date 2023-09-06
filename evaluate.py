@@ -11,7 +11,7 @@ from src.problem import Instance
 from src.solver import (ConfEarlyFixingSolver, EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
                         WarmStartingSolver)
 
-TIME_BUDGET = 5 * 60  # 2 minutes
+TIME_BUDGET = 2 * 60  # 2 minutes
 
 if __name__ == '__main__':
     evaluation = sys.argv[1]
@@ -42,8 +42,12 @@ if __name__ == '__main__':
         evaluation_name = 'warms-starting'
         solver = WarmStartingSolver(net_run_id, n, timeout=TIME_BUDGET)
     elif evaluation == 'tr':
+        try:
+            delta = float(sys.argv[4])
+        except IndexError:
+            delta = 1/20
         evaluation_name = 'trust-region'
-        solver = TrustRegionSolver(net_run_id, n, timeout=TIME_BUDGET)
+        solver = TrustRegionSolver(net_run_id, n, timeout=TIME_BUDGET, delta=delta)
     elif evaluation == 'bs':
         evaluation_name = 'baseline'
         solver = SCIPSolver(timeout=TIME_BUDGET)
