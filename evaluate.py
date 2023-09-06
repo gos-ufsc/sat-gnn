@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 import wandb
 from src.problem import Instance
-from src.solver import (ConfEarlyFixingSolver, EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
+from src.solver import (ConfEarlyFixingSolver, ConfidenceRegionSolver, EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
                         WarmStartingSolver)
 
 TIME_BUDGET = 2 * 60  # 2 minutes
@@ -47,7 +47,10 @@ if __name__ == '__main__':
         except IndexError:
             delta = 1/20
         evaluation_name = 'trust-region'
-        solver = TrustRegionSolver(net_run_id, n, timeout=TIME_BUDGET, Delta=delta)
+        solver = TrustRegionSolver(net_run_id, n, timeout=TIME_BUDGET, delta=delta)
+    elif evaluation == 'cr':
+        evaluation_name = 'confidence-region'
+        solver = ConfidenceRegionSolver(net_run_id, timeout=TIME_BUDGET, k=n)
     elif evaluation == 'bs':
         evaluation_name = 'baseline'
         solver = SCIPSolver(timeout=TIME_BUDGET)

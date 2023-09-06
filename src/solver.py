@@ -89,14 +89,17 @@ class LearningBasedSolver(ABC,SCIPSolver):
         self._net_config = net_config
         self._net_group = net_group
 
-    def get_candidate_solution(self, instance: Instance):
+    def _get_prediction(self, instance: Instance):
         model = instance.to_gurobipy()
         graph = instance.to_graph(model=model)
 
         with torch.set_grad_enabled(False):
             x_hat = self.net.get_candidate(graph).flatten().cpu()
             x_hat = x_hat[:len(instance.vars_names)]  # drop zetas
-
+        
+        return x_hat
+    
+    def _get_candidate_from_prediction(self, instance: Instance, x_hat):
         most_certain_idx  = (x_hat - 0.5).abs().sort(descending=True).indices
 
         candidate_x_hat = (x_hat[most_certain_idx[:self.n]] > .5).to(x_hat)
@@ -105,20 +108,24 @@ class LearningBasedSolver(ABC,SCIPSolver):
 
         return candidate
 
+    def get_candidate_solution(self, instance: Instance):
+        x_hat = self._get_prediction(instance)
+
+        candidate = self._get_candidate_from_prediction(instance, x_hat)
+
+        return candidate
+
 class ConfLearningBasedSolver(LearningBasedSolver):
     def __init__(self, net_wandb_id: str, confidence_threshold: float, timeout=60) -> None:
         self.confidence_threshold = confidence_threshold
         super().__init__(net_wandb_id, None, timeout)
 
-    def get_candidate_solution(self, instance: Instance):
-        model = instance.to_gurobipy()
-        graph = instance.to_graph(model=model)
+    @staticmethod
+    def _get_pred_conf(x_hat):
+        return (x_hat - 0.5).abs() + 0.5
 
-        with torch.set_grad_enabled(False):
-            x_hat = self.net.get_candidate(graph).flatten().cpu()
-            x_hat = x_hat[:len(instance.vars_names)]  # drop zetas
-
-        confidence = (x_hat - 0.5).abs() + 0.5
+    def _get_candidate_from_prediction(self, instance: Instance, x_hat):
+        confidence = self._get_pred_conf(x_hat)
 
         candidate_x_hat = (x_hat[confidence > self.confidence_threshold] > .5).to(x_hat)
         candidate_vars_names = instance.vars_names[confidence > self.confidence_threshold]
@@ -186,7 +193,7 @@ class TrustRegionSolver(LearningBasedSolver):
         if Delta < 1:
             self.Delta = int(n * Delta)
         else:
-            self.Delta = Delta
+            self.Delta = int(Delta)
 
     def load_model(self, instance):
         model = super().load_model(instance)
@@ -204,5 +211,35 @@ class TrustRegionSolver(LearningBasedSolver):
                     model.addCons(abs_diffs[-1] >= diff)
                     model.addCons(abs_diffs[-1] >= -diff)
             model.addCons(quicksum(abs_diffs) <= self.Delta)
+
+        return model
+
+class ConfidenceRegionSolver(ConfLearningBasedSolver):
+    def __init__(self, net_wandb_id: str, k=1, timeout=60) -> None:
+        # with confidence_threshold=-1, all variables are part of the candidate
+        super().__init__(net_wandb_id, -1, timeout)
+
+        self.k = float(k)
+
+    def load_model(self, instance):
+        model = super().load_model(instance)
+
+        x_hat = self._get_prediction(instance)
+        candidate = self._get_candidate_from_prediction(instance, x_hat)
+
+        confidence = self._get_pred_conf(x_hat)
+        Delta = (1 - confidence).sum()
+
+        if candidate is not None:
+            abs_diffs = list()
+            i = 0
+            for var in model.getVars():
+                if var.name in candidate.keys():
+                    diff = var - candidate[var.name]
+
+                    abs_diffs.append(model.addVar(name="diff(%s)" % i, lb=0, ub=1, vtype="CONTINUOUS"))
+                    model.addCons(abs_diffs[-1] >= diff)
+                    model.addCons(abs_diffs[-1] >= -diff)
+            model.addCons(quicksum(abs_diffs) <= self.k * Delta)
 
         return model
