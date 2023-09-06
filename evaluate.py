@@ -3,57 +3,46 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+import click
 import numpy as np
 from tqdm import tqdm
 
 import wandb
 from src.problem import Instance
-from src.solver import (ConfEarlyFixingSolver, ConfidenceRegionSolver, EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
+from src.solver import (ConfEarlyFixingSolver, ConfidenceRegionSolver,
+                        EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
                         WarmStartingSolver)
 
-TIME_BUDGET = 2 * 60  # 2 minutes
 
-if __name__ == '__main__':
-    evaluation = sys.argv[1]
-
-    try:
-        net_run_id = sys.argv[2]
-    except IndexError:
-        assert evaluation == 'bs'
-        net_run_id = 'baseline'
-
-    try:
-        n = int(sys.argv[3])
-    except ValueError:
-        n = float(sys.argv[3])
-        assert n < 1.0
-    except IndexError:
-        n = 0
-
+@click.command()
+@click.argument('evaluation', type=click.STRING)
+@click.argument('net_run_id', type=click.STRING)
+@click.option('--n', default=0.0, type=click.FLOAT)
+@click.option('--delta', default=0.001, type=click.FLOAT)
+@click.option('--k', default=1.0, type=click.FLOAT)
+@click.option('--threshold', default=0.0, type=click.FLOAT)
+@click.option('--T', default=2*60, type=click.INT)
+def evaluate(evaluation, net_run_id, n, delta, k, threshold, T):
     assert len(net_run_id) == 8, 'a wandb run id was not provided: '+net_run_id
 
     if evaluation == 'ef':
         evaluation_name = 'early-fixing'
-        if n < 1 and n > 0:
-            solver = ConfEarlyFixingSolver(net_run_id, n, timeout=TIME_BUDGET)
+        if threshold > 0:
+            solver = ConfEarlyFixingSolver(net_run_id, threshold, timeout=T)
         else:
-            solver = EarlyFixingSolver(net_run_id, n, timeout=TIME_BUDGET)
+            solver = EarlyFixingSolver(net_run_id, n, timeout=T)
     elif evaluation == 'ws':
         evaluation_name = 'warms-starting'
-        solver = WarmStartingSolver(net_run_id, n, timeout=TIME_BUDGET)
+        solver = WarmStartingSolver(net_run_id, n, timeout=T)
     elif evaluation == 'tr':
-        try:
-            delta = float(sys.argv[4])
-        except IndexError:
-            delta = 1/20
         evaluation_name = 'trust-region'
-        solver = TrustRegionSolver(net_run_id, n, timeout=TIME_BUDGET, delta=delta)
+        solver = TrustRegionSolver(net_run_id, n, timeout=T, delta=delta)
     elif evaluation == 'cr':
         evaluation_name = 'confidence-region'
-        solver = ConfidenceRegionSolver(net_run_id, timeout=TIME_BUDGET, k=n)
+        solver = ConfidenceRegionSolver(net_run_id, timeout=T, k=k)
     elif evaluation == 'bs':
         evaluation_name = 'baseline'
-        solver = SCIPSolver(timeout=TIME_BUDGET)
+        solver = SCIPSolver(timeout=T)
     else:
         raise NotImplementedError
 
@@ -74,7 +63,7 @@ if __name__ == '__main__':
         run.config['model_run_id'] = net_run_id
         run.config['test_instances'] = [fp.name for fp in instances_fpaths]
         run.config['n'] = n if evaluation != 'bs' else 0
-        run.config['time_budget'] = TIME_BUDGET
+        run.config['time_budget'] = T
 
     for instance_fpath in tqdm(instances_fpaths):
         # load (quasi-)optimal objective
@@ -102,3 +91,6 @@ if __name__ == '__main__':
             quasi_optimal_objective=quasi_optimal_objective,
             **asdict(result),
         ))
+
+if __name__ == '__main__':
+    evaluate()

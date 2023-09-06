@@ -102,8 +102,8 @@ class LearningBasedSolver(ABC,SCIPSolver):
     def _get_candidate_from_prediction(self, instance: Instance, x_hat):
         most_certain_idx  = (x_hat - 0.5).abs().sort(descending=True).indices
 
-        candidate_x_hat = (x_hat[most_certain_idx[:self.n]] > .5).to(x_hat)
-        candidate_vars_names = instance.vars_names[most_certain_idx[:self.n]]
+        candidate_x_hat = (x_hat[most_certain_idx[:int(self.n)]] > .5).to(x_hat)
+        candidate_vars_names = instance.vars_names[most_certain_idx[:int(self.n)]]
         candidate = dict(zip(candidate_vars_names, candidate_x_hat))
 
         return candidate
