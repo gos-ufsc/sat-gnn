@@ -47,7 +47,7 @@ if __name__ == '__main__':
         except IndexError:
             delta = 1/20
         evaluation_name = 'trust-region'
-        solver = TrustRegionSolver(net_run_id, n, timeout=TIME_BUDGET, delta=delta)
+        solver = TrustRegionSolver(net_run_id, n, timeout=TIME_BUDGET, Delta=delta)
     elif evaluation == 'bs':
         evaluation_name = 'baseline'
         solver = SCIPSolver(timeout=TIME_BUDGET)
@@ -61,7 +61,10 @@ if __name__ == '__main__':
     for i in range(20):  # VALIDATION
         instances_fpaths += sorted(list(instances_dir.glob('125_2*_'+str(i)+'.json')))
 
-    instances_fpaths = [fp for fp in instances_fpaths if not (results_dir/(f"{net_run_id}_{evaluation}_{n}_"+fp.name)).exists()]
+    if evaluation == 'tr':
+        instances_fpaths = [fp for fp in instances_fpaths if not (results_dir/(f"{net_run_id}_{evaluation}_{n}_{delta}_"+fp.name)).exists()]
+    else:
+        instances_fpaths = [fp for fp in instances_fpaths if not (results_dir/(f"{net_run_id}_{evaluation}_{n}_"+fp.name)).exists()]
 
     if len(instances_fpaths) > 0:
         run = wandb.init(project='sat-gnn', job_type=evaluation_name+'-eval')
@@ -83,7 +86,10 @@ if __name__ == '__main__':
 
         result = solver.solve(instance)
 
-        result_fpath = results_dir/(f"{net_run_id}_{evaluation}_{n}_"+instance_fpath.name)
+        if evaluation == 'tr':
+            result_fpath = results_dir/(f"{net_run_id}_{evaluation}_{n}_{delta}_"+instance_fpath.name)
+        else:
+            result_fpath = results_dir/(f"{net_run_id}_{evaluation}_{n}_"+instance_fpath.name)
         with open(result_fpath, 'w') as f:
             json.dump(asdict(result), f)
 
