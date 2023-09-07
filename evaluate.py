@@ -22,7 +22,8 @@ from src.solver import (ConfEarlyFixingSolver, ConfidenceRegionSolver,
 @click.option('--k', default=1.0, type=click.FLOAT)
 @click.option('--threshold', default=0.0, type=click.FLOAT)
 @click.option('--T', default=2*60, type=click.INT)
-def evaluate(evaluation, net_run_id, n, delta, k, threshold, T):
+def evaluate(evaluation, net_run_id, n, delta, k, threshold, t):
+    T = t
     assert len(net_run_id) == 8, 'a wandb run id was not provided: '+net_run_id
 
     if evaluation == 'ef':
@@ -36,7 +37,7 @@ def evaluate(evaluation, net_run_id, n, delta, k, threshold, T):
         solver = WarmStartingSolver(net_run_id, n, timeout=T)
     elif evaluation == 'tr':
         evaluation_name = 'trust-region'
-        solver = TrustRegionSolver(net_run_id, n, timeout=T, delta=delta)
+        solver = TrustRegionSolver(net_run_id, n, timeout=T, Delta=delta)
     elif evaluation == 'cr':
         evaluation_name = 'confidence-region'
         solver = ConfidenceRegionSolver(net_run_id, timeout=T, k=k)
