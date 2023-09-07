@@ -16,7 +16,7 @@ from src.solver import (ConfEarlyFixingSolver, ConfidenceRegionSolver,
 
 @click.command()
 @click.argument('evaluation', type=click.STRING)
-@click.argument('net_run_id', type=click.STRING)
+@click.argument('net_run_id', type=click.STRING, required=False)
 @click.option('--n', default=0.0, type=click.FLOAT)
 @click.option('--delta', default=0.001, type=click.FLOAT)
 @click.option('--k', default=1.0, type=click.FLOAT)
