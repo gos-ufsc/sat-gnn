@@ -26,8 +26,8 @@ class ONTSSolver():
         pass
 
 class SCIPSolver(ONTSSolver):
-    def solve(self, instance: Instance) -> Result:
-        model = self.load_model(instance)
+    def solve(self, instance: Instance, hide_output=True) -> Result:
+        model = self.load_model(instance, hide_output=hide_output)
 
         model.optimize()
 
@@ -50,10 +50,12 @@ class SCIPSolver(ONTSSolver):
 
         return result
 
-    def load_model(self, instance):
+    def load_model(self, instance, hide_output=True) -> ModelWithPrimalDualIntegral:
         model = instance.to_scip(enable_primal_dual_integral=True,
                                  timeout=self.timeout)
-        model.hideOutput()
+
+        if hide_output:
+            model.hideOutput()
 
         return model
 
@@ -134,8 +136,8 @@ class ConfLearningBasedSolver(LearningBasedSolver):
         return candidate
 
 class WarmStartingSolver(LearningBasedSolver):
-    def load_model(self, instance):
-        model = super().load_model(instance)
+    def load_model(self, instance, hide_output=True):
+        model = super().load_model(instance, hide_output=hide_output)
 
         candidate = self.get_candidate_solution(instance)
 
@@ -153,8 +155,8 @@ class WarmStartingSolver(LearningBasedSolver):
         return model
 
 class EarlyFixingSolver(LearningBasedSolver):
-    def load_model(self, instance):
-        model = super().load_model(instance)
+    def load_model(self, instance, hide_output=True):
+        model = super().load_model(instance, hide_output=hide_output)
 
         candidate = self.get_candidate_solution(instance)
 
@@ -170,8 +172,8 @@ class EarlyFixingSolver(LearningBasedSolver):
         return model
 
 class ConfEarlyFixingSolver(ConfLearningBasedSolver):
-    def load_model(self, instance):
-        model = super().load_model(instance)
+    def load_model(self, instance, hide_output=True):
+        model = super().load_model(instance, hide_output=hide_output)
 
         candidate = self.get_candidate_solution(instance)
 
@@ -195,8 +197,8 @@ class TrustRegionSolver(LearningBasedSolver):
         else:
             self.Delta = int(Delta)
 
-    def load_model(self, instance):
-        model = super().load_model(instance)
+    def load_model(self, instance, hide_output=True):
+        model = super().load_model(instance, hide_output=hide_output)
 
         candidate = self.get_candidate_solution(instance)
 
@@ -221,8 +223,8 @@ class ConfidenceRegionSolver(ConfLearningBasedSolver):
 
         self.k = float(k)
 
-    def load_model(self, instance):
-        model = super().load_model(instance)
+    def load_model(self, instance, hide_output=True):
+        model = super().load_model(instance, hide_output=hide_output)
 
         x_hat = self._get_prediction(instance)
         candidate = self._get_candidate_from_prediction(instance, x_hat)
