@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 import sys
 from time import time
 
@@ -52,3 +54,42 @@ def compute_integral(curve, T=120, timestep=1e-3):
         return np.nan
     else:
         return T - timestep * curve.sum()
+
+def get_first_feasible(curve):
+    try:
+        return np.where(curve > 0)[0][0] / 1000
+    except IndexError:
+        return np.nan
+
+def load_all_results(shortname: str, results_dir: Path, opts_dir: Path, T=125,
+                     TIME_BUDGET=120):
+    results = list()
+    for result_fpath in results_dir.glob(shortname+f'_{T}_2*.json'):
+        size = int(result_fpath.name.split('_')[-2])
+        size_id = int(result_fpath.name.split('_')[-1][:-len('.json')])
+
+        with open(result_fpath) as f:
+            result = json.load(f)
+
+        solution_fpath = opts_dir/f"{T}_{size}_{size_id}_opt.npz"
+        solution_npz = np.load(solution_fpath)
+        quasi_optimal_objective = solution_npz['arr_0'].astype('uint32')
+
+        results.append(dict(
+            size=size,
+            size_id=size_id,
+            opt_obj=quasi_optimal_objective,
+            **result
+        ))
+
+    if len(results) == 0:
+        return None
+    else:
+        df = pd.DataFrame(results)
+        df['primal_curve'] = df['primal_curve'].apply(normalize_curve, T=TIME_BUDGET)
+        df['primal_curve'] = df['primal_curve'] / df['opt_obj']
+
+        df['time_to_feasible'] = df['primal_curve'].map(get_first_feasible)
+        df['time_to_feasible'].fillna(TIME_BUDGET, inplace=True)
+
+        return df
