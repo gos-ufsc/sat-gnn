@@ -31,6 +31,11 @@ class SCIPSolver(ONTSSolver):
 
         model.optimize()
 
+        result = self.get_result(model)
+
+        return result
+
+    def get_result(self, model):
         if (len(model.getSols()) == 0) or (model.getStatus().lower() not in ['optimal', 'timelimit']):
             result = Result(
                 infeasible=True,
