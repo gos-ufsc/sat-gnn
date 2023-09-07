@@ -12,22 +12,24 @@ from tqdm import tqdm
 
 import wandb
 from src.problem import Instance
-from src.solver import (ConfEarlyFixingSolver, ConfidenceRegionSolver,
-                        EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
-                        WarmStartingSolver)
+from src.solver import (EarlyFixingSolver, SCIPSolver, TrustRegionSolver,
+                        WarmStartingSolver, LearningBasedSolver)
 
-def _evaluate_instance(solver, evaluation, net_run_id, n, delta, solutions_dir, results_dir, instance_fpath, hide_output=True):
+def _evaluate_instance(solver, candidate, evaluation, net_run_id, n, delta, solutions_dir, results_dir, instance_fpath, hide_output=True):
     # load (quasi-)optimal objective
-    solution_fpath = solutions_dir/instance_fpath.name.replace('.json', '_opt.npz')
-    solution_npz = np.load(solution_fpath)
-    quasi_optimal_objective = solution_npz['arr_0'].astype('uint32')
+    # solution_fpath = solutions_dir/instance_fpath.name.replace('.json', '_opt.npz')
+    # solution_npz = np.load(solution_fpath)
+    # quasi_optimal_objective = solution_npz['arr_0'].astype('uint32')
 
-    instance_size = int(instance_fpath.name.split('_')[1])
-    instance_i = int(instance_fpath.name.split('_')[-1][:-len('.json')])
+    # instance_size = int(instance_fpath.name.split('_')[1])
+    # instance_i = int(instance_fpath.name.split('_')[-1][:-len('.json')])
 
     instance = Instance.from_file(instance_fpath)
 
-    result = solver.solve(instance, hide_output=hide_output)
+    if isinstance(solver, LearningBasedSolver):
+        result = solver.solve(instance, candidate=candidate, hide_output=hide_output)
+    else:
+        result = solver.solve(instance, hide_output=hide_output)
 
     if evaluation == 'tr':
         result_fpath = results_dir/(f"{net_run_id}_{evaluation}_{n}_{delta}_"+instance_fpath.name)
@@ -41,10 +43,8 @@ def _evaluate_instance(solver, evaluation, net_run_id, n, delta, solutions_dir, 
 @click.argument('net_run_id', type=click.STRING, required=False)
 @click.option('--n', default=0.0, type=click.FLOAT)
 @click.option('--delta', default=0.001, type=click.FLOAT)
-@click.option('--k', default=1.0, type=click.FLOAT)
-@click.option('--threshold', default=0.0, type=click.FLOAT)
 @click.option('--T', default=10*60, type=click.INT)
-def evaluate(evaluation, net_run_id, n, delta, k, threshold, t):
+def evaluate(evaluation, net_run_id, n, delta, t):
     T = t
 
     if net_run_id is None:
@@ -54,19 +54,13 @@ def evaluate(evaluation, net_run_id, n, delta, k, threshold, t):
 
     if evaluation == 'ef':
         evaluation_name = 'early-fixing'
-        if threshold > 0:
-            solver = ConfEarlyFixingSolver(net_run_id, threshold, timeout=T)
-        else:
-            solver = EarlyFixingSolver(net_run_id, n, timeout=T)
+        solver = EarlyFixingSolver(net_run_id, n, timeout=T)
     elif evaluation == 'ws':
         evaluation_name = 'warms-starting'
         solver = WarmStartingSolver(net_run_id, n, timeout=T)
     elif evaluation == 'tr':
         evaluation_name = 'trust-region'
         solver = TrustRegionSolver(net_run_id, n, timeout=T, Delta=delta)
-    elif evaluation == 'cr':
-        evaluation_name = 'confidence-region'
-        solver = ConfidenceRegionSolver(net_run_id, timeout=T, k=k)
     elif evaluation == 'bs':
         evaluation_name = 'baseline'
         solver = SCIPSolver(timeout=T)
@@ -113,11 +107,19 @@ def evaluate(evaluation, net_run_id, n, delta, k, threshold, t):
         
             _evaluate_instance(*args)
 
+    if isinstance(solver, LearningBasedSolver):
+        candidates = [solver.get_candidate_solution(Instance.from_file(instance_fpath)) for instance_fpath in instances_fpaths]
+        delattr(solver, 'net')  # net is not needed anymore, so free from memory
+    else:
+        candidates = [None for _ in instances_fpaths]
+
     queue = Queue()
     pool = Pool(30, worker, (queue,))
 
-    for instance_fpath in instances_fpaths:
-        queue.put((solver, evaluation, net_run_id, n, delta, solutions_dir, results_dir, instance_fpath))
+    for instance_fpath, candidate in zip(instances_fpaths, candidates):
+        queue.put((solver, candidate, evaluation, net_run_id, n, delta, solutions_dir, results_dir, instance_fpath))
+        # args = (solver, candidate, evaluation, net_run_id, n, delta, solutions_dir, results_dir, instance_fpath)
+        # _evaluate_instance(*args)
     queue.put(None)
 
     pool.close()
