@@ -17,13 +17,16 @@ from src.solver import (ConfEarlyFixingSolver, ConfidenceRegionSolver,
 @click.command()
 @click.argument('evaluation', type=click.STRING)
 @click.argument('net_run_id', type=click.STRING, required=False)
-@click.option('--n', default=0.0, type=click.FLOAT)
+@click.option('--n', default=0, type=click.INT)
 @click.option('--delta', default=0.001, type=click.FLOAT)
 @click.option('--k', default=1.0, type=click.FLOAT)
 @click.option('--threshold', default=0.0, type=click.FLOAT)
 @click.option('--T', default=2*60, type=click.INT)
 def evaluate(evaluation, net_run_id, n, delta, k, threshold, t):
     T = t
+
+    if net_run_id is None:
+        net_run_id = 'baseline'
     assert len(net_run_id) == 8, 'a wandb run id was not provided: '+net_run_id
 
     if evaluation == 'ef':
