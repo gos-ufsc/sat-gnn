@@ -18,11 +18,12 @@ from src.solver import (ConfEarlyFixingSolver, ConfidenceRegionSolver,
 @click.argument('evaluation', type=click.STRING)
 @click.argument('net_run_id', type=click.STRING, required=False)
 @click.option('--n', default=0, type=click.INT)
-@click.option('--delta', default=0.001, type=click.FLOAT)
+@click.option('--delta', default=1, type=click.INT)
 @click.option('--k', default=1.0, type=click.FLOAT)
 @click.option('--threshold', default=0.0, type=click.FLOAT)
 @click.option('--T', default=2*60, type=click.INT)
-def evaluate(evaluation, net_run_id, n, delta, k, threshold, t):
+@click.option('--test', is_flag=True, default=False)
+def evaluate(evaluation, net_run_id, n, delta, k, threshold, t, test):
     T = t
 
     if net_run_id is None:
@@ -54,8 +55,9 @@ def evaluate(evaluation, net_run_id, n, delta, k, threshold, t):
     results_dir = Path('/home/bruno/sat-gnn/data/results')
     instances_dir = Path('/home/bruno/sat-gnn/data/raw')
     instances_fpaths = list()
+    offset = 20 if test else 0
     for i in range(20):  # VALIDATION
-        instances_fpaths += sorted(list(instances_dir.glob('125_2*_'+str(i)+'.json')))
+        instances_fpaths += sorted(list(instances_dir.glob('125_2*_'+str(i+offset)+'.json')))
 
     if evaluation == 'tr':
         instances_fpaths = [fp for fp in instances_fpaths if not (results_dir/(f"{net_run_id}_{evaluation}_{n}_{delta}_"+fp.name)).exists()]
