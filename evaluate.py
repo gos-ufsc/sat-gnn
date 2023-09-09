@@ -42,8 +42,8 @@ def _evaluate_instance(solver, candidate, evaluation, net_run_id, n, delta, solu
 @click.argument('evaluation', type=click.STRING)
 @click.argument('net_run_id', type=click.STRING, required=False)
 @click.option('--n', default=0.0, type=click.FLOAT)
-@click.option('--delta', default=0.001, type=click.FLOAT)
-@click.option('--T', default=10*60, type=click.INT)
+@click.option('--delta', default=1, type=click.INT)
+@click.option('--T', default=5*60, type=click.INT)
 def evaluate(evaluation, net_run_id, n, delta, t):
     T = t
 
@@ -114,7 +114,7 @@ def evaluate(evaluation, net_run_id, n, delta, t):
         candidates = [None for _ in instances_fpaths]
 
     queue = Queue()
-    pool = Pool(30, worker, (queue,))
+    pool = Pool(15, worker, (queue,))
 
     for instance_fpath, candidate in zip(instances_fpaths, candidates):
         queue.put((solver, candidate, evaluation, net_run_id, n, delta, solutions_dir, results_dir, instance_fpath))
