@@ -99,3 +99,38 @@ def load_all_results(shortname: str, results_dir: Path, opts_dir: Path, T=125,
         df['time_to_feasible'].fillna(TIME_BUDGET, inplace=True)
 
         return df
+
+def boxplot_bound(df, goal, column, axs, TIME_BUDGET=120):
+    df_ = df[df['goal'] == goal]
+
+    labels = list()
+    valuess = list()
+    for m, h in df_[['model', 'heuristic']].drop_duplicates().values:
+        label = f"{m} + {h}"
+        labels.append(label)
+        valuess.append(
+        df_[(df_['model'] == m) & (df_['heuristic'] == h)][column].values
+    )
+
+        curve = df_[(df_['model'] == m) & (df_['heuristic'] == h)]['primal_curve'].mean()
+        dt = TIME_BUDGET / (len(curve)-1)
+        auc = np.sum(curve * dt)
+        x = np.arange(len(curve)) * dt
+
+        if m == 'Baseline':
+            axs[1].plot(x, curve, color='black', label=f"Baseline ({auc:.2f})")
+        else:
+            axs[1].plot(x, curve, label=f"{label} ({auc:.2f})")
+    axs[1].set_ylabel('Lower bound')
+    axs[1].set_xlabel('Time [s]')
+    axs[1].set_xlim(0,TIME_BUDGET)
+    axs[1].set_ylim(0,1)
+    axs[1].grid()
+    axs[1].legend()
+
+    axs[0].boxplot(valuess, labels=labels, vert=False, showmeans=True)
+
+    axs[0].vlines(df_[(df_['model'] == 'Baseline')][column].mean(), linestyles='--', *axs[0].get_ylim())
+    axs[0].grid()
+
+    return axs
