@@ -62,9 +62,15 @@ def get_first_feasible(curve):
         return np.nan
 
 def load_all_results(shortname: str, results_dir: Path, opts_dir: Path, T=125,
-                     TIME_BUDGET=120):
+                     TIME_BUDGET=120, test=False):
     results = list()
-    for result_fpath in results_dir.glob(shortname+f'_{T}_2*.json'):
+
+    if test:
+        results_fpaths = [fp for fp in results_dir.glob(shortname+f'_{T}_2*.json') if int(fp.name.split('_')[-1][:-len('.json')]) >= 20]
+    else:
+        results_fpaths = [fp for fp in results_dir.glob(shortname+f'_{T}_2*.json') if int(fp.name.split('_')[-1][:-len('.json')]) < 20]
+
+    for result_fpath in results_fpaths:
         size = int(result_fpath.name.split('_')[-2])
         size_id = int(result_fpath.name.split('_')[-1][:-len('.json')])
 
