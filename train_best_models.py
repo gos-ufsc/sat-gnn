@@ -1,13 +1,12 @@
 from pathlib import Path
-import pickle
+
 import numpy as np
 import torch
 import torch.nn
-from src.dataset import MultiTargetDataset, OptimalsDataset, OptimalsWithZetaDataset, VarOptimalityDataset, SolutionFeasibilityDataset
-from time import sleep
 
+from src.dataset import MultiTargetDataset, OptimalsDataset
 from src.net import OptSatGNN
-from src.trainer import MultiTargetTrainer, OptimalsTrainer, PhiMultiTargetTrainer, VarOptimalityTrainer, FeasibilityClassificationTrainer
+from src.trainer import MultiTargetTrainer, OptimalsTrainer
 from src.utils import debugger_is_active
 
 

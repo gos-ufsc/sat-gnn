@@ -1,12 +1,9 @@
-import json
-import os
-import time
 import logging
 import logging.handlers
-
-from multiprocessing import Process, Value, Array, Lock, Queue, current_process
+import os
+import time
+from multiprocessing import Array, Lock, Process, Queue, Value, current_process
 from pathlib import Path
-from time import sleep
 
 import numpy as np
 from gurobipy import GRB
@@ -31,7 +28,8 @@ def listener_process(queue, log_fpath):
             logger = logging.getLogger(record.name)
             logger.handle(record)  # No level or filter logic applied - just do it!
         except Exception:
-            import sys, traceback
+            import sys
+            import traceback
             print('Whoops! Problem:', file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
 

@@ -1,9 +1,8 @@
 import sys
-
 from pathlib import Path
-from tqdm import tqdm
 
 import numpy as np
+from tqdm import tqdm
 
 from src.problem import Instance
 

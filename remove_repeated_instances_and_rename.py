@@ -1,10 +1,11 @@
 import json
 from pathlib import Path
+
 import numpy as np
+
 
 def add_to_mbd(mbd, values):
     return mbd + '_'.join(str(v) for v in values)
-
 
 if __name__ == '__main__':
     for T in [97, 120, 125, 154, 170, 194, 291]:

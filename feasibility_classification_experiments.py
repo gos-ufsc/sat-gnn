@@ -5,8 +5,8 @@ import torch
 
 from src.dataset import SolutionFeasibilityDataset
 from src.net import FeasSatGNN
-from src.trainer import FeasibilityClassificationTrainer, InstanceFeasibilityClassificationTrainer
-
+from src.trainer import (FeasibilityClassificationTrainer,
+                         InstanceFeasibilityClassificationTrainer)
 
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")

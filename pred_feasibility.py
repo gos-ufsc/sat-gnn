@@ -2,7 +2,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
 from tqdm import tqdm
 
 from src.dataset import SolutionFeasibilityDataset

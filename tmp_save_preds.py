@@ -1,12 +1,13 @@
 import pickle
 import sys
 from pathlib import Path
-from src.net import OptSatGNN
-from tqdm import tqdm
-from src.problem import Instance
 
 import torch
+from tqdm import tqdm
+
 import wandb
+from src.net import OptSatGNN
+from src.problem import Instance
 
 
 if __name__ == '__main__':
@@ -47,7 +48,7 @@ if __name__ == '__main__':
         with torch.set_grad_enabled(False):
             x_hat = net.get_candidate(graph).flatten().cpu()
             x_hat = x_hat[:len(instance.vars_names)]  # drop zetas
-        
+
         preds.append({
             'fp': instance_fpath,
             'size': instance.jobs,

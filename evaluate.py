@@ -1,5 +1,4 @@
 import json
-import sys
 from dataclasses import asdict
 from pathlib import Path
 

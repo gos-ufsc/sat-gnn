@@ -1,20 +1,17 @@
 import os
+from itertools import product
 from pathlib import Path
-from time import time
-import pickle
-import numpy as np
+from random import shuffle
+
 import torch
 import torch.nn
 from torch.cuda import OutOfMemoryError
 from tqdm import tqdm
 
-from itertools import product
-from random import shuffle
-
+from src.dataset import OptimalsDataset
 from src.net import OptSatGNN
 from src.trainer import OptimalsTrainer
 from src.utils import debugger_is_active
-from src.dataset import OptimalsDataset
 
 
 def product_dict(**kwargs):
