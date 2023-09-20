@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import numpy as np
+
 import torch
+from pyscipopt import quicksum
 
 import wandb
-from pyscipopt import quicksum
 from src.net import OptSatGNN
-from src.problem import Instance, ModelWithPrimalDualIntegral
+from src.problem import Instance
 
 
 @dataclass

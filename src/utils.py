@@ -1,13 +1,14 @@
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from time import time
 
-import torch
-import torch.nn as nn
-import wandb
 import numpy as np
 import pandas as pd
+import torch
+import torch.nn as nn
+
+import wandb
 
 
 def timeit(fun):

@@ -1,29 +1,24 @@
-from collections import OrderedDict
 import logging
 import random
-from abc import ABC, abstractmethod
+from abc import ABC
 from contextlib import nullcontext
 from pathlib import Path
 from time import time
-from typing import List
-from tqdm import tqdm
 
 import dgl
-import gurobipy
 import numpy as np
 import torch
 import torch.nn as nn
-import wandb
-from torch.cuda.amp import GradScaler, autocast
-from torch.utils.data.sampler import SubsetRandomSampler
-from torch.utils.data import DataLoader, Dataset
-from dgl.dataloading import GraphDataLoader
 from dgl.data import DGLDataset
 from dgl.data.utils import Subset
-from src.net import SatGNN, VarInstanceGCN
+from dgl.dataloading import GraphDataLoader
+from torch.cuda.amp import GradScaler, autocast
+from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 
-from src.problem import ModelWithPrimalDualIntegral, get_soc
-from src.dataset import MultiTargetDataset, OptimalsDataset, VarOptimalityDataset
+import wandb
+from src.net import SatGNN
+from src.problem import ModelWithPrimalDualIntegral
 from src.utils import timeit
 
 
@@ -844,55 +839,6 @@ class MultiTargetTrainer(GraphTrainer):
 
         return losses
 
-class PhiMultiTargetTrainer(MultiTargetTrainer):
-    def get_loss_and_metrics(self, output, y, w, validation=False):
-        # TODO: maybe rewrite things so that batch_size > 1 is possible
-        y = y.squeeze(0)
-        w = w.squeeze(0)
-
-        # get only phi variables
-        phi_filter = torch.ones_like(output.squeeze(0)) == 0  # only False
-        phi_filter = phi_filter.view(-1, 2*97)
-        phi_filter[:,97:] = True
-        phi_filter = phi_filter.flatten()
-
-        # start = time()
-        # y_hat = torch.sigmoid(output).repeat((y.shape[0],1))
-
-        #compute weight
-        # exp_weight = torch.exp(-w / w.max())
-        # weight = exp_weight/exp_weight.sum()
-        weight = torch.softmax(w / w.max(), -1)
-
-        # cross-entropy
-        # pos_loss = -(y_hat + 1e-8).log()*(y == 1)
-        # neg_loss = -(1 - y_hat + 1e-8).log()*(y == 0)
-        # sum_loss = pos_loss + neg_loss
-
-        # loss = sum_loss.sum(-1) @ weight
-        # loss_time = time() - start
-
-        loss_time, loss =  timeit(self._loss_func)(
-            output.repeat((y.shape[0],1))[...,phi_filter],
-            y[:,:output.shape[-1]][...,phi_filter]
-        )
-        loss = weight @ loss.sum(-1)
-
-        metrics = None
-        if validation:
-            y_pred_ = (torch.sigmoid(output) > 0.5).squeeze(0).cpu().numpy().astype(int)[...,phi_filter.cpu()]
-            y_ = (y.cpu().numpy()[:,:output.shape[-1]] > 0.5).astype(int)[...,phi_filter.cpu()]
-            hit = y_pred_.tolist() in y_.tolist()
-            if hit:
-                hit_i = y_.tolist().index(y_pred_.tolist())
-                gap = w.max() - w[hit_i]
-            else:
-                gap = -1
-
-            metrics = (hit, gap)
-
-        return loss_time, loss, metrics
-
 class OptimalsTrainer(GraphTrainer):
     def __init__(self, net: SatGNN, training_dataset: DGLDataset,
                  validation_dataset: DGLDataset = None,
@@ -965,27 +911,3 @@ class OptimalsTrainer(GraphTrainer):
             losses['acc'] = accs
 
         return losses
-
-class VarOptimalityTrainer(OptimalsTrainer):
-    def __init__(self, net: VarInstanceGCN,
-                 training_dataset: VarOptimalityDataset,
-                 validation_dataset: VarOptimalityDataset = None,
-                 test_dataset: VarOptimalityDataset = None,
-                 get_best_model=False, epochs=5, lr=0.001,
-                 batch_size=2 ** 4, optimizer: str = 'Adam',
-                 optimizer_params=dict(), loss_func: str = 'BCEWithLogitsLoss',
-                 loss_func_params=dict(), lr_scheduler: str = None,
-                 lr_scheduler_params=dict(), mixed_precision=True, device=None,
-                 wandb_project=None, wandb_group=None, logger=None,
-                 checkpoint_every=50, random_seed=42, max_loss=None) -> None:
-        super().__init__(net, training_dataset, validation_dataset,
-                         test_dataset, get_best_model, epochs,
-                         lr, batch_size, optimizer, optimizer_params,
-                         loss_func, loss_func_params, lr_scheduler,
-                         lr_scheduler_params, mixed_precision, device,
-                         wandb_project, wandb_group, logger, checkpoint_every,
-                         random_seed, max_loss)
-
-        self._add_to_wandb_config({
-            "samples_per_instance": training_dataset.samples_per_instance,
-        })
