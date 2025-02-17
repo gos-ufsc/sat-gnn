@@ -113,16 +113,16 @@ def instance_generator(shared, lock, target_dir, log_queue, N=100):
 
 if __name__ == '__main__':
     n_processes = 12
-    target_dir = Path('/home/bruno/sat-gnn/data/raw/new')
+    target_dir = Path('/home/bruno/sat-gnn/data/raw')
 
-    N = 200
+    N = 40
 
     # get number of instances by size
     new_instances = dict()
     tjs = list()
     ns = list()
     for tj in [(t, j) for t in [125]
-                      for j in [9,13,18]]:
+                      for j in [26]]:
         n = len(list(target_dir.glob("%d_%d_*.json" % tj)))
 
         if n < N:
