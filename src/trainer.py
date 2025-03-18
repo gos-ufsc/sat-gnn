@@ -543,6 +543,7 @@ class GraphTrainer(Trainer):
         self._add_to_wandb_config({
             "n_passes": self.net.n_passes,
             "n_h_feats": self.net.n_h_feats,
+            "n_output_layers": self.net.n_output_layers,
             "single_conv": self.net.single_conv_for_both_passes,
             "n_convs": len(self.net.convs),
             "train_dataset": training_dataset.name,
