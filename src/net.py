@@ -140,6 +140,15 @@ class PreNormConv(GraphConv):
 
             return rst
 
+class IdentityConv(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, graph, feat):
+        with graph.local_scope():
+            feat_src, feat_dst = expand_as_pair(feat, graph)
+            return feat_dst
+
 class SatGNN(nn.Module):
     """Expects all features to be on the `x` data.
     """
@@ -147,12 +156,14 @@ class SatGNN(nn.Module):
                  single_conv_for_both_passes=False, n_passes=1, conv1='SAGEConv',
                  conv1_kwargs={'aggregator_type': 'pool'}, conv2='SAGEConv',
                  conv2_kwargs={'aggregator_type': 'pool'}, conv3=None,
-                 conv3_kwargs=dict(), readout_op=None):
+                 conv3_kwargs=dict(), n_output_layers=3, readout_op=None):
         super().__init__()
 
         self.n_passes = n_passes
         self.n_h_feats = n_h_feats
         self.single_conv_for_both_passes = single_conv_for_both_passes
+
+        self.n_output_layers = n_output_layers
 
         self.n_var_feats = n_var_feats
         self.n_con_feats = n_con_feats
@@ -192,6 +203,9 @@ class SatGNN(nn.Module):
         elif conv1 == 'GATv2Conv':
             c1_forward = GATv2Conv(n_h_feats, n_h_feats, **conv1_kwargs)
             c1_backward = GATv2Conv(n_h_feats, n_h_feats, **conv1_kwargs)
+        elif conv1 == None:
+            c1_forward = IdentityConv()
+            c1_backward = IdentityConv()
 
         if single_conv_for_both_passes:
             c1_backward = c1_forward
@@ -270,13 +284,12 @@ class SatGNN(nn.Module):
 
         self.convs = nn.Sequential(*self.convs)
 
-        self.output = nn.Sequential(
+        output_layers = [
             nn.Linear(n_h_feats, n_h_feats),
             nn.ReLU(),
-            nn.Linear(n_h_feats, n_h_feats),
-            nn.ReLU(),
-            nn.Linear(n_h_feats, 1),
-        ).double()
+        ] * (self.n_output_layers - 1)
+        output_layers.append(nn.Linear(n_h_feats, 1))
+        self.output = nn.Sequential(*output_layers).double()
 
         self.readout_op = readout_op
 
@@ -356,19 +369,19 @@ class FeasSatGNN(SatGNN):
                  n_h_feats=8, single_conv_for_both_passes=False, n_passes=1,
                  conv1='GraphConv', conv1_kwargs=dict(),
                  conv2=None, conv2_kwargs=dict(),
-                 conv3=None, conv3_kwargs=dict(), readout_op='mean'):
+                 conv3=None, conv3_kwargs=dict(), n_output_layers=3, readout_op='mean'):
         super().__init__(n_var_feats, n_con_feats, n_soc_feats, n_h_feats,
                          single_conv_for_both_passes, n_passes, conv1,
                          conv1_kwargs, conv2, conv2_kwargs, conv3, conv3_kwargs,
-                         readout_op)
+                         n_output_layers, readout_op)
 
 class OptSatGNN(SatGNN):
     def __init__(self, n_var_feats=7, n_con_feats=4, n_soc_feats=6,
                  n_h_feats=64, single_conv_for_both_passes=False, n_passes=1,
                  conv1='SAGEConv', conv1_kwargs={ 'aggregator_type': 'pool' },
                  conv2=None, conv2_kwargs=dict(),
-                 conv3=None, conv3_kwargs=dict()):
+                 conv3=None, conv3_kwargs=dict(), n_output_layers=3):
         super().__init__(n_var_feats, n_con_feats, n_soc_feats, n_h_feats,
                          single_conv_for_both_passes, n_passes, conv1,
                          conv1_kwargs, conv2, conv2_kwargs, conv3, conv3_kwargs,
-                         readout_op=None)
+                         n_output_layers, readout_op=None)
